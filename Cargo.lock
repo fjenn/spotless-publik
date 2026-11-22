@@ -1982,7 +1982,7 @@ dependencies = [
 
 [[package]]
 name = "encore-core"
-version = "1.0.4-rc.5.3"
+version = "1.0.4-rc.5"
 dependencies = [
  "ammonia",
  "any_ascii",
@@ -2032,7 +2032,7 @@ dependencies = [
 
 [[package]]
 name = "encore-ffi"
-version = "1.0.4-rc.5.3"
+version = "1.0.4-rc.5"
 dependencies = [
  "encore-core",
  "innertube",
@@ -3391,7 +3391,7 @@ dependencies = [
 
 [[package]]
 name = "innertube"
-version = "1.0.4-rc.5.3"
+version = "1.0.4-rc.5"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -3853,7 +3853,7 @@ dependencies = [
 
 [[package]]
 name = "limusic-app"
-version = "1.0.4-rc.5.3"
+version = "1.0.4-rc.5"
 dependencies = [
  "encore-core",
  "futures-util",
@@ -5220,7 +5220,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "player"
-version = "1.0.4-rc.5.3"
+version = "1.0.4-rc.5"
 dependencies = [
  "anyhow",
  "hound",
@@ -8154,7 +8154,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "1.0.4-rc.5.3"
+version = "1.0.4-rc.5"
 dependencies = [
  "uniffi",
 ]
