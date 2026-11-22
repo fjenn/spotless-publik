@@ -876,7 +876,7 @@ pub fn run() {
             if let Some(layout) = gtk::Settings::default()
                 .and_then(|s| gtk::prelude::GtkSettingsExt::gtk_decoration_layout(&s))
             {
-                let _ = commands::BUTTON_LAYOUT.set(layout.into());
+                let _ = encore_core::api::BUTTON_LAYOUT.set(layout.into());
             }
 
             // App data dir for the SQLite file and mpv's on-disk audio cache (`Host::cache_dir`).
@@ -991,13 +991,26 @@ pub fn run() {
 
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
+                // An AppImage has no installer to tell the desktop about spotless:// links (the
+                // .deb/.rpm ship them in their .desktop file): register them at launch, pointing
+                // at this AppImage's path. Windows' NSIS installer writes them to the registry.
+                #[cfg(target_os = "linux")]
+                if app.env().appimage.is_some() {
+                    if let Err(e) = app.deep_link().register_all() {
+                        tracing::warn!(error = %e, "could not register the spotless:// link handler");
+                    }
+                }
                 let h = handle.clone();
                 app.deep_link().on_open_url(move |e| {
                     deeplink::route(&h, e.urls().into_iter().map(|u| u.to_string()));
                 });
             }
 
-            // Native menu bar (menu.rs). UI items reach the page as `menu://<id>` events.
+            // Native menu bar (menu.rs), macOS only: Spotify on Windows has no menu bar, and a
+            // Tauri menu there would draw a strip under the title bar. Off macOS the page binds the
+            // same shortcuts itself (shortcuts.ts, `native` false). UI items reach the page as
+            // `menu://<id>` events.
+            #[cfg(target_os = "macos")]
             match menu::build(&handle) {
                 Ok(m) => {
                     if let Err(e) = app.set_menu(m) {

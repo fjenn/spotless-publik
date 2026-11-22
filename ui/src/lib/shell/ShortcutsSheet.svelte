@@ -8,6 +8,7 @@
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	import { Dialog } from 'bits-ui';
 	import { ui } from '$lib/player.svelte';
+	import { keyCap } from '$lib/shortcuts';
 
 	type Row = [string, string[]];
 	const SECTIONS: [string, Row[]][] = [
@@ -96,7 +97,7 @@
 			</Dialog.Close>
 		</div>
 		<p class="mt-2 flex flex-wrap items-center gap-1 text-sm text-white">
-			Press <kbd class="key">⌘</kbd><kbd class="key">/</kbd> or <kbd class="key">?</kbd> to toggle this modal.
+			Press <kbd class="key">{keyCap('⌘')}</kbd><kbd class="key">/</kbd> or <kbd class="key">?</kbd> to toggle this modal.
 		</p>
 	</div>
 	<div class="px-6 pb-6">
@@ -105,7 +106,7 @@
 			{#each rows as [label, keys] (label)}
 				<div class="flex min-h-10 items-center justify-between gap-4">
 					<span class="text-sm text-white">{label}</span>
-					<span class="flex gap-1">{#each keys as k, i (i)}<kbd class="key">{k === '⇧' ? 'Shift' : k}</kbd>{/each}</span>
+					<span class="flex gap-1">{#each keys as k, i (i)}<kbd class="key">{k === '⇧' ? 'Shift' : keyCap(k)}</kbd>{/each}</span>
 				</div>
 			{/each}
 		{/each}

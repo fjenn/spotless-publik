@@ -460,6 +460,7 @@ pub fn spawn_event_pump(state: Arc<AppState>, mut events: UnboundedReceiver<Play
                     state.on_lookahead_failed().await;
                 }
                 PlayerEvent::VideoFailed(audio) => state.on_video_failed(&audio).await,
+                PlayerEvent::VideoDropped(audio) => state.on_video_dropped(&audio),
                 PlayerEvent::Error(msg) => {
                     tracing::error!(error = %msg, "player error");
                     let _ = host.emit("playback-error", serde_json::json!({ "message": msg }));

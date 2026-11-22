@@ -33,6 +33,9 @@ pub(crate) struct Videos {
     by_audio: VecDeque<(String, String)>,
     /// The file each deck has open, as of its last `FileLoaded`.
     loaded: [Option<String>; 2],
+    /// The audio file whose picture stalled playback and was dropped (see [`watch`]). Its
+    /// picture is not selected again until the view asks for it anew.
+    dropped: Option<String>,
 }
 
 impl Videos {
@@ -43,6 +46,11 @@ impl Videos {
             self.by_audio.pop_front();
         }
         self.by_audio.push_back((audio.to_owned(), video.to_owned()));
+    }
+
+    /// The file `deck` has open had its picture dropped.
+    fn dropped_on(&self, deck: usize) -> bool {
+        self.dropped.is_some() && self.dropped == self.loaded[deck]
     }
 
     fn video_for(&self, deck: usize) -> Option<String> {
@@ -80,10 +88,27 @@ impl Player {
 
     /// Whether anyone can see the picture. Off, mpv decodes no video at all; back on, it picks the
     /// track up again at the current position, already in step.
+    ///
+    /// Shown again after being hidden, a picture dropped for stalling is tried once more (the
+    /// user switched back to video, or the connection is back), and the stall watch restarts.
     pub fn set_video_visible(&self, on: bool) {
         if self.decks.video_visible.swap(on, Ordering::SeqCst) != on {
+            if on {
+                self.decks.videos.lock().unwrap().dropped = None;
+            }
             apply_vid(&self.decks);
+            if on {
+                watch(self.decks.clone());
+            } else {
+                self.decks.video_watch.fetch_add(1, Ordering::SeqCst);
+            }
         }
+    }
+
+    /// The playing file's picture was dropped because it stalled playback (see [`watch`]).
+    pub fn video_dropped(&self) -> bool {
+        let deck = self.decks.active.load(Ordering::SeqCst);
+        self.decks.videos.lock().unwrap().dropped_on(deck)
     }
 
     /// Draw the picture into the native window `wid` (mpv's `wid`, an HWND on Windows) with mpv's
@@ -175,13 +200,13 @@ impl Player {
 /// while the next one's video is still being added, instead of closing and letting the desktop
 /// show through. Off with the picture, which closes the output and frees what it held.
 pub(crate) fn apply_vid(decks: &Decks) {
-    let _serial = decks.videos.lock().unwrap();
+    let serial = decks.videos.lock().unwrap();
     let active = decks.active.load(Ordering::SeqCst);
     let on = decks.video_visible.load(Ordering::SeqCst);
     let embedded = decks.wid.load(Ordering::SeqCst) != 0;
     for deck in 0..2 {
         if let Some(m) = decks.mpv(deck) {
-            let show = on && deck == active;
+            let show = on && deck == active && !serial.dropped_on(deck);
             if embedded {
                 let _ = m.set_property("force-window", if show { "yes" } else { "no" });
             }
@@ -498,9 +523,10 @@ fn add_video(decks: &Arc<Decks>, deck: usize, audio: String, url: String) {
             let _ = decks.tx.send(crate::PlayerEvent::VideoFailed(audio));
             return;
         }
-        let _serial = decks.videos.lock().unwrap();
+        let serial = decks.videos.lock().unwrap();
         let shown = decks.video_visible.load(Ordering::SeqCst)
-            && decks.active.load(Ordering::SeqCst) == deck;
+            && decks.active.load(Ordering::SeqCst) == deck
+            && !serial.dropped_on(deck);
         let track = shown.then(|| newest_video_track(&mpv)).flatten();
         let _ = match track {
             Some(id) => mpv.set_property("vid", id),
@@ -508,6 +534,82 @@ fn add_video(decks: &Arc<Decks>, deck: usize, audio: String, url: String) {
         };
         tracing::debug!(deck, ?track, "video: attached");
     });
+}
+
+/// How long playback may sit still, with the picture selected and the sound itself ready, before
+/// the picture is blamed and dropped.
+const STALL_LIMIT: std::time::Duration = std::time::Duration::from_millis(2500);
+const WATCH_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The picture is a second stream mpv reads alongside the sound (`video-add`), and mpv only plays
+/// when every selected stream has data. After a seek it has to fetch the video at the new offset
+/// over the network: offline, or on a dead or crawling link, that never comes and the sound waits
+/// with it, silent, while the very same file plays at once with the picture off (`vid=no`). Seen
+/// with a downloaded podcast episode in video mode: scrub, and playback stops until audio-only.
+///
+/// So while the picture is shown, a thread watches the deck being heard. Playing, not paused, the
+/// picture selected, and the clock stuck (or mpv paused for cache) for [`STALL_LIMIT`] while the
+/// sound itself is not the one waiting (a local file, or seconds of audio already buffered): the
+/// picture is to blame. It is dropped for that file, the sound plays on, and the app is told.
+pub(crate) fn watch(decks: Arc<Decks>) {
+    let gen = decks.video_watch.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = std::thread::Builder::new().name("mpv-video-watch".into()).spawn(move || {
+        let mut last: Option<f64> = None;
+        let mut stuck = std::time::Duration::ZERO;
+        loop {
+            std::thread::sleep(WATCH_TICK);
+            if decks.video_watch.load(Ordering::SeqCst) != gen
+                || !decks.video_visible.load(Ordering::SeqCst)
+            {
+                return;
+            }
+            let deck = decks.active.load(Ordering::SeqCst);
+            let Some(mpv) = decks.mpv(deck).cloned() else { continue };
+            let selected = mpv.get_property::<String>("vid").map_or(false, |v| v != "no");
+            let paused = mpv.get_property::<bool>("pause").unwrap_or(true);
+            let idle = mpv.get_property::<bool>("idle-active").unwrap_or(true);
+            let pos = mpv.get_property::<f64>("time-pos").ok();
+            let waiting = mpv.get_property::<bool>("paused-for-cache").unwrap_or(false);
+            let moved = match (last, pos) {
+                (Some(a), Some(b)) => (b - a).abs() > 0.02,
+                _ => false,
+            };
+            last = pos;
+            if !selected || paused || idle || (moved && !waiting) {
+                stuck = std::time::Duration::ZERO;
+                continue;
+            }
+            stuck += WATCH_TICK;
+            if stuck < STALL_LIMIT {
+                continue;
+            }
+            stuck = std::time::Duration::ZERO;
+            let Some(path) = mpv.get_property::<String>("path").ok() else { continue };
+            if !sound_ready(&mpv, &path) {
+                continue;
+            }
+            {
+                let mut v = decks.videos.lock().unwrap();
+                if v.loaded[deck].as_deref() != Some(path.as_str()) {
+                    continue;
+                }
+                v.dropped = Some(path.clone());
+            }
+            tracing::warn!(deck, "video: the picture stalled playback, dropped; the sound plays on");
+            apply_vid(&decks);
+            let _ = decks.tx.send(crate::PlayerEvent::VideoDropped(path));
+        }
+    });
+}
+
+/// The sound is not what playback is waiting for: a file on disk, or a stream with seconds of
+/// audio already buffered ahead (mpv's `demuxer-cache-duration` is the main, audio, demuxer's).
+fn sound_ready(mpv: &libmpv2::Mpv, path: &str) -> bool {
+    is_local(path) || mpv.get_property::<f64>("demuxer-cache-duration").map_or(false, |d| d >= 2.0)
+}
+
+fn is_local(path: &str) -> bool {
+    !path.contains("://") || path.starts_with("file://")
 }
 
 /// The id of the last video track in the file, which is the one `video-add` just appended.
@@ -583,6 +685,28 @@ mod tests {
     use super::*;
 
     /// A video belongs to the file a deck has open, by exact URL, and a re-resolve replaces it.
+    #[test]
+    fn local_files_are_told_from_streams() {
+        assert!(super::is_local("/var/mobile/Containers/Data/Application/x/Downloads/ep.m4a"));
+        assert!(super::is_local("file:///tmp/ep.webm"));
+        assert!(super::is_local("C:\\Users\\me\\Music\\ep.m4a"));
+        assert!(!super::is_local("http://127.0.0.1:8123/stream/abc"));
+        assert!(!super::is_local("https://rr1---sn.googlevideo.com/videoplayback?x"));
+    }
+
+    #[test]
+    fn a_dropped_picture_belongs_to_its_file_only() {
+        let mut v = super::Videos::default();
+        v.loaded[0] = Some("a".into());
+        v.loaded[1] = Some("b".into());
+        assert!(!v.dropped_on(0));
+        v.dropped = Some("a".into());
+        assert!(v.dropped_on(0));
+        assert!(!v.dropped_on(1));
+        v.loaded[0] = Some("c".into());
+        assert!(!v.dropped_on(0), "the next file's picture is not dropped");
+    }
+
     #[test]
     fn a_video_follows_its_audio_file() {
         let mut v = Videos::default();

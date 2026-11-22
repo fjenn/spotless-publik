@@ -1,0 +1,137 @@
+name: E2E updater (Windows, Linux AppImage)
+
+# The real update path: install release `from`, let it update itself to release `to`, check the
+# newer version is installed and running. `from`'s feed URL (releases/latest/…, i.e. whatever is
+# marked Latest) is pointed at a temporary test feed holding `to`'s own latest.json, so nothing has
+# to be marked Latest for the test. The feed release (tag e2eupd) is deleted afterwards.
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Installed first, e.g. v1.0.4-rc.6"
+        required: true
+        type: string
+      to:
+        description: "Must be offered and installed, e.g. v1.0.4-rc.7"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: e2e-update
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  FROM: ${{ inputs.from }}
+  TO: ${{ inputs.to }}
+
+jobs:
+  feed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test feed release e2eupd ← latest.json of ${{ inputs.to }}
+        run: |
+          set -euo pipefail
+          gh release delete e2eupd --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release download "$TO" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir feed
+          jq -c '{version, platforms: (.platforms | keys)}' feed/latest.json
+          gh release create e2eupd feed/latest.json --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
+            --target main --title "E2E updater feed (test only, deleted after the run)" --notes "Temporary. Not a release."
+
+  windows:
+    needs: feed
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install ${{ inputs.from }} and point it at the test feed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          gh release download $env:FROM --repo $env:GITHUB_REPOSITORY --pattern Spotless-Setup.exe --dir $env:RUNNER_TEMP
+          Start-Process "$env:RUNNER_TEMP\Spotless-Setup.exe" -ArgumentList '/S' -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Spotless", "$env:LOCALAPPDATA\Programs", "$env:ProgramFiles" -Recurse -Filter Spotless.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          node e2e/scripts/patch-feed.mjs $exe.FullName
+          "SPOTLESS_APP=$($exe.FullName)" | Out-File -Append $env:GITHUB_ENV
+      - name: Update from inside the app (banner › Install, through UI Automation)
+        shell: pwsh
+        run: ./e2e/scripts/update-windows.ps1 -Exe $env:SPOTLESS_APP -Want $env:TO.TrimStart('v')
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-update-windows
+          path: ${{ runner.temp }}/e2e-out/
+
+  linux:
+    needs: feed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq webkit2gtk-driver xvfb openbox pulseaudio pulseaudio-utils libfuse2t64 dbus-x11 python3-gi xdg-utils desktop-file-utils imagemagick >/dev/null
+      - uses: actions/cache@v4
+        id: td
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: tauri-driver-linux-2
+      - if: steps.td.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+      - name: ${{ inputs.from }} AppImage, pointed at the test feed
+        run: |
+          set -euo pipefail
+          mkdir -p ~/Applications w && cd w
+          gh release download "$FROM" --repo "$GITHUB_REPOSITORY" --pattern Spotless.AppImage
+          chmod +x Spotless.AppImage && ./Spotless.AppImage --appimage-extract >/dev/null
+          node "$GITHUB_WORKSPACE/e2e/scripts/patch-feed.mjs" squashfs-root/usr/bin/spotless
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool && ARCH=x86_64 ./appimagetool --no-appstream squashfs-root ~/Applications/Spotless.AppImage >/dev/null
+          gh release download "$TO" --repo "$GITHUB_REPOSITORY" --pattern Spotless.AppImage --dir to
+          echo "WANT_SHA=$(sha256sum to/Spotless.AppImage | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "SPOTLESS_APP=$HOME/Applications/Spotless.AppImage" >> "$GITHUB_ENV"
+      - name: Update from inside the app
+        working-directory: e2e
+        env:
+          E2E_OUT: ${{ runner.temp }}/e2e-out
+          E2E_SPEC: ./specs/update.e2e.mjs
+          UPDATE_TO: ${{ inputs.to }}
+          TAURI_WEBVIEW_AUTOMATION: "true"
+        run: |
+          mkdir -p "$E2E_OUT/shots"
+          npm install --no-audit --no-fund
+          cat > /tmp/after.sh <<'EOS'
+          export DISPLAY=:99
+          for i in $(seq 1 36); do
+            have=$(sha256sum "$SPOTLESS_APP" | cut -d' ' -f1)
+            run=$(pgrep -f "Spotless.AppImage|/spotless" | head -1 || true)
+            [ "$have" = "$WANT_SHA" ] && [ -n "$run" ] && break
+            sleep 5
+          done
+          echo "AppImage sha now $have (want $WANT_SHA); running pid: ${run:-none}"
+          import -window root "$E2E_OUT/shots/after-update.png" 2>/dev/null || true
+          echo "### AppImage update: $FROM → $( [ "$have" = "$WANT_SHA" ] && echo "$TO installed" || echo "NOT updated" ), running: ${run:-no}" >> "$GITHUB_STEP_SUMMARY"
+          [ "$have" = "$WANT_SHA" ] && [ -n "$run" ]
+          EOS
+          dbus-run-session -- bash -c 'bash scripts/run-linux.sh; echo "wdio exit $?"; bash /tmp/after.sh'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-update-linux
+          path: ${{ runner.temp }}/e2e-out/
+
+  cleanup:
+    needs: [windows, linux]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh release delete e2eupd --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true

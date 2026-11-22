@@ -32,7 +32,7 @@
 set -uo pipefail
 
 APPDIR=/app
-BIN="$APPDIR/usr/bin/limusic-app"
+BIN="$(ls "$APPDIR"/usr/bin/spotless "$APPDIR"/usr/bin/limusic-app 2>/dev/null | head -1)"
 FAIL=0
 step() { printf '\n── %s\n' "$1"; }
 bad()  { echo "   FAIL: $1"; FAIL=1; }

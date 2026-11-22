@@ -1,0 +1,212 @@
+name: E2E (Windows, Linux)
+
+# Installs a published release the way a user would (the NSIS installer on Windows; the AppImage
+# and the .deb on Ubuntu), then drives the real app through WebDriver (tauri-driver: msedgedriver
+# for WebView2, WebKitWebDriver for WebKitGTK) and checks every feature against the Mac app's. See
+# e2e/README.md. Screenshots and a pass/fail table are uploaded per OS.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release to test, e.g. v1.0.4-rc.6"
+        required: true
+        type: string
+      spec:
+        description: "Spec file (default: the full parity suite)"
+        required: false
+        type: string
+      windows_run:
+        description: "Test the installer from this Release Windows run's artifact instead (run id)"
+        required: false
+        type: string
+      linux_run:
+        description: "Test the packages from this Release Linux dry run's artifact instead (run id)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: e2e-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  TAG: ${{ inputs.tag || 'v1.0.4-rc.6' }}
+  E2E_SPEC: ${{ inputs.spec || './specs/parity.e2e.mjs' }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: A sound card (virtual)
+        uses: LABSN/sound-ci-helpers@v1
+
+      - name: tauri-driver
+        uses: actions/cache@v4
+        id: td
+        with:
+          path: ~/.cargo/bin/tauri-driver.exe
+          key: tauri-driver-win-2
+      - if: steps.td.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+
+      - name: msedgedriver matching the WebView2 runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $keys = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+                  'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $ver = $null; foreach ($k in $keys) { if (Test-Path $k) { $ver = (Get-ItemProperty $k).pv; break } }
+          if (-not $ver) { $ver = (Get-Item "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe").VersionInfo.ProductVersion }
+          Write-Host "WebView2 $ver"
+          $dir = "$env:RUNNER_TEMP\edgedriver"; New-Item -ItemType Directory -Force $dir | Out-Null
+          foreach ($u in "https://msedgedriver.microsoft.com/$ver/edgedriver_win64.zip", "https://msedgedriver.azureedge.net/$ver/edgedriver_win64.zip") {
+            try { Invoke-WebRequest $u -OutFile "$dir\d.zip"; break } catch { Write-Host "no $u" }
+          }
+          Expand-Archive "$dir\d.zip" -DestinationPath $dir -Force
+          "NATIVE_DRIVER=$dir\msedgedriver.exe" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Install Spotless (silent NSIS, like a user)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ inputs.windows_run }}") {
+            gh run download "${{ inputs.windows_run }}" --repo $env:GITHUB_REPOSITORY --pattern 'Spotless-*-windows' --dir "$env:RUNNER_TEMP\art"
+            Copy-Item (Get-ChildItem "$env:RUNNER_TEMP\art" -Recurse -Filter Spotless-Setup.exe | Select-Object -First 1).FullName "$env:RUNNER_TEMP\Spotless-Setup.exe"
+          } else {
+            gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern Spotless-Setup.exe --dir $env:RUNNER_TEMP
+          }
+          Start-Process "$env:RUNNER_TEMP\Spotless-Setup.exe" -ArgumentList '/S' -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Spotless", "$env:LOCALAPPDATA\Programs", "$env:ProgramFiles" -Recurse -Filter Spotless.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw "Spotless.exe not found after install" }
+          Write-Host "installed: $($exe.FullName)"
+          Get-ChildItem $exe.DirectoryName | Format-Table Name, Length
+          "SPOTLESS_APP=$($exe.FullName)" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Startup check (installed app, no WebDriver)
+        shell: pwsh
+        run: |
+          $out = "$env:RUNNER_TEMP\e2e-out"; New-Item -ItemType Directory -Force "$out\shots" | Out-Null
+          $p = Start-Process $env:SPOTLESS_APP -PassThru
+          Start-Sleep 30
+          Write-Host "alive after 30 s: $(-not $p.HasExited)  exit code: $($p.ExitCode)"
+          Get-CimInstance Win32_Process -Filter "name='msedgewebview2.exe'" | Select-Object -First 2 -ExpandProperty CommandLine
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$out\shots\00-startup-check.png")
+          Get-ChildItem $env:APPDATA, $env:LOCALAPPDATA -Recurse -Filter *.log -ErrorAction SilentlyContinue | Where-Object FullName -match 'spotless' | ForEach-Object { "== $($_.FullName)"; Get-Content $_.FullName -Tail 60 }
+          Get-WinEvent -LogName Application -MaxEvents 50 -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'Spotless' } | Format-List TimeCreated, Id, ProviderName, Message
+          Stop-Process -Name Spotless -Force -ErrorAction SilentlyContinue
+          Start-Sleep 3
+      - name: WebView2 DevTools port for the test (policy, like an admin would set it)
+        shell: pwsh
+        run: |
+          $k = 'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          New-Item -Path $k -Force | Out-Null
+          New-ItemProperty -Path $k -Name 'Spotless.exe' -Value '--remote-debugging-port=9222' -PropertyType String -Force | Out-Null
+      - name: Run the suite
+        working-directory: e2e
+        shell: pwsh
+        env:
+          E2E_OUT: ${{ runner.temp }}\e2e-out
+        run: |
+          npm install --no-audit --no-fund
+          npx wdio run wdio.conf.mjs
+
+      - name: Desktop screenshot
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\e2e-out\shots" | Out-Null
+          $bmp.Save("$env:RUNNER_TEMP\e2e-out\shots\zz-desktop.png")
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-windows
+          path: ${{ runner.temp }}/e2e-out/
+          retention-days: 14
+
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        format: [appimage, deb]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Desktop session pieces
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq webkit2gtk-driver xvfb openbox pulseaudio pulseaudio-utils libfuse2t64 \
+            dbus-x11 python3-gi xdg-utils desktop-file-utils imagemagick libglib2.0-bin >/dev/null
+
+      - name: tauri-driver
+        uses: actions/cache@v4
+        id: td
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: tauri-driver-linux-2
+      - if: steps.td.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+
+      - name: Install Spotless (${{ matrix.format }})
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.format }}" = appimage ]; then
+            mkdir -p "$HOME/Applications"
+            if [ -n "${{ inputs.linux_run }}" ]; then
+              gh run download "${{ inputs.linux_run }}" --repo "$GITHUB_REPOSITORY" -n linux-packages --dir art
+              cp "$(find art -name '*.AppImage' | head -1)" "$HOME/Applications/Spotless.AppImage"
+            else
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern Spotless.AppImage --dir "$HOME/Applications"
+            fi
+            chmod +x "$HOME/Applications/Spotless.AppImage"
+            echo "SPOTLESS_APP=$HOME/Applications/Spotless.AppImage" >> "$GITHUB_ENV"
+          else
+            if [ -n "${{ inputs.linux_run }}" ]; then
+              gh run download "${{ inputs.linux_run }}" --repo "$GITHUB_REPOSITORY" -n linux-packages --dir art
+              cp "$(find art -name '*.deb' | head -1)" "$RUNNER_TEMP/Spotless_amd64.deb"
+            else
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern Spotless_amd64.deb --dir "$RUNNER_TEMP"
+            fi
+            sudo apt-get install -y -qq "$RUNNER_TEMP/Spotless_amd64.deb"
+            echo "SPOTLESS_APP=$(command -v spotless)" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run the suite
+        working-directory: e2e
+        env:
+          E2E_OUT: ${{ runner.temp }}/e2e-out
+          TAURI_WEBVIEW_AUTOMATION: "true"
+          TAURI_AUTOMATION: "true"
+          SPOTLESS_NO_MOVE: "1"
+        run: |
+          npm install --no-audit --no-fund
+          dbus-run-session -- bash scripts/run-linux.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-linux-${{ matrix.format }}
+          path: ${{ runner.temp }}/e2e-out/
+          retention-days: 14

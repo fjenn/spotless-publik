@@ -257,7 +257,14 @@ pub(crate) fn open_browser(url: &str) -> Result<(), String> {
         .ok_or_else(|| "only http(s) links".to_string())?;
     #[cfg(target_os = "macos")]
     let cmd = std::process::Command::new("open").arg(url.as_str()).spawn().map(|_| ());
-    #[cfg(not(target_os = "macos"))]
+    // Windows: the shell's URL handler. Not `cmd /c start`, where an `&` in the query splits the
+    // command line.
+    #[cfg(target_os = "windows")]
+    let cmd = std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", url.as_str()])
+        .spawn()
+        .map(|_| ());
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let cmd = std::process::Command::new("xdg-open").arg(url.as_str()).spawn().map(|_| ());
     cmd.map_err(|e| format!("Couldn't open the browser: {e}"))
 }

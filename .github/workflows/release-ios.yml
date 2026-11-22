@@ -1,6 +1,7 @@
 # Builds the iPhone app (ios/Encore) for the App Store and uploads it to App Store Connect, where it
 # shows up in TestFlight once Apple has processed it (usually 5-30 minutes after the run).
-# Nothing is published on GitHub; the run summary names the version and build number uploaded.
+# The same archive, unsigned, becomes Spotless.ipa for sideloading (SideStore / AltStore): published
+# on a GitHub pre-release named after the tag, with altstore.json (never the Mac "latest" release).
 #
 # Start it by pushing a tag:  git tag ios-v1.0.4-15 && git push origin ios-v1.0.4-15
 # (ios-v<MARKETING_VERSION>-<CURRENT_PROJECT_VERSION>, both from ios/Encore/project.yml; the run
@@ -38,9 +39,14 @@ on:
         description: "Tag to build, e.g. ios-v1.0.4-15 (empty: the chosen branch as it is)"
         required: false
         type: string
+      testflight:
+        description: "Upload to TestFlight (off: only the sideload IPA on GitHub)"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
-  contents: read
+  contents: write   # the sideload IPA's GitHub release (ios-v* tags only)
 
 # One upload per tag at a time; never cancel a run that may be halfway through an upload.
 concurrency:
@@ -59,6 +65,8 @@ jobs:
     timeout-minutes: 120
     env:
       TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+      # Tag pushes always upload; a manual run can skip TestFlight and only publish the IPA.
+      UPLOAD: ${{ github.event_name == 'push' || inputs.testflight }}
     steps:
       - name: Paths
         run: |
@@ -263,9 +271,41 @@ jobs:
           echo "archived $got"
           [ "$got" = "$VERSION ($BUILD)" ] || { echo "::error::the archive says $got, expected $VERSION ($BUILD)"; exit 1; }
 
+      # Sideloading (SideStore / AltStore with a free Apple ID): the same archived .app, unsigned.
+      # The archive's development signature and embedded profile are stripped so the sideloading
+      # tool signs it with the user's own Apple ID. Packaged here (seconds, no second build), published
+      # after the TestFlight upload, so a problem here never blocks TestFlight.
+      - name: Unsigned IPA for sideloading
+        id: ipa
+        continue-on-error: true   # never in TestFlight's way; the publish step below then skips
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/ipa"
+          rm -rf "$STAGE"; mkdir -p "$STAGE/Payload"
+          APP="$STAGE/Payload/Spotless.app"
+          ditto "$ARCHIVE/Products/Applications/Encore.app" "$APP"
+          rm -f "$APP/embedded.mobileprovision"
+          find "$APP" -name _CodeSignature -type d -prune -exec rm -rf {} +
+          # Every Mach-O (the app, its frameworks and dylibs, any extension) loses its signature.
+          n=0
+          while IFS= read -r -d '' f; do
+            if file -b "$f" | grep -q '^Mach-O'; then codesign --remove-signature "$f"; n=$((n + 1)); fi
+          done < <(find "$APP" -type f -perm -u+x -print0)
+          echo "removed $n signatures"
+          if codesign -d "$APP" >/dev/null 2>&1; then echo "::error::$APP is still signed"; exit 1; fi
+          IPA="$RUNNER_TEMP/Spotless.ipa"
+          rm -f "$IPA"
+          (cd "$STAGE" && zip -qry -X "$IPA" Payload)
+          echo "Spotless.ipa: $(du -h "$IPA" | cut -f1)"
+          {
+            echo "IPA=$IPA"
+            echo "IPA_APP=$APP"
+          } >> "$GITHUB_ENV"
+
       # destination=upload in the export options: this signs for distribution and uploads to App
       # Store Connect in one go (no altool / Transporter step).
       - name: Export and upload to App Store Connect
+        if: env.UPLOAD == 'true'
         env:
           ASC_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
@@ -288,6 +328,54 @@ jobs:
             echo "Bundle \`$BUNDLE_ID\`${TAG:+, tag \`$TAG\`}. It appears in TestFlight once Apple has processed it."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "uploaded $VERSION build $BUILD"
+
+      # One pre-release per iOS tag on this repo, never "latest" (releases/latest stays the Mac
+      # DMG): Spotless.ipa, Spotless-<version>-<build>.ipa and altstore.json (the AltStore/SideStore
+      # source for this build; opena.tech/spotless/altstore.json serves the newest one). Safe to
+      # re-run: existing assets are replaced.
+      - name: Publish the IPA to GitHub (sideloading)
+        id: publish
+        if: env.TAG != '' && steps.ipa.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/sideload"
+          rm -rf "$OUT"; mkdir -p "$OUT"
+          NAMED="Spotless-$VERSION-$BUILD.ipa"
+          cp "$IPA" "$OUT/Spotless.ipa"
+          cp "$IPA" "$OUT/$NAMED"
+          ruby scripts/ci/altstore-source.rb "$IPA_APP" "$IPA" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$NAMED" > "$OUT/altstore.json"
+          ASSETS=("$OUT/Spotless.ipa" "$OUT/$NAMED" "$OUT/altstore.json")
+          NOTES="Spotless for iPhone $VERSION ($BUILD), unsigned for sideloading (iOS 17+).
+
+          Install with SideStore or AltStore: add the source https://opena.tech/spotless/altstore.json and tap Install, or open Spotless.ipa in either. With a free Apple ID the app is re-signed every 7 days (both tools refresh it on their own). The Mac app is in the latest release."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            gh release edit "$TAG" --prerelease --latest=false
+          else
+            gh release create "$TAG" "${ASSETS[@]}" --verify-tag --prerelease --latest=false \
+              --title "Spotless for iPhone $VERSION ($BUILD)" --notes "$NOTES"
+          fi
+          {
+            echo "### Sideload IPA published"
+            gh release view "$TAG" --json url --jq .url
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A dispatch without a tag publishes nothing, and a failed publish should not need a rebuild:
+      # keep the IPA as a run artifact in both cases.
+      - name: Keep the IPA
+        if: always() && steps.ipa.outcome == 'success' && (env.TAG == '' || steps.publish.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spotless-ipa
+          path: ${{ runner.temp }}/Spotless.ipa
+          retention-days: 7
+
+      - name: Sideload IPA missing
+        if: steps.ipa.outcome == 'failure'
+        run: echo "::warning::The unsigned IPA could not be packaged (see 'Unsigned IPA for sideloading'); TestFlight is unaffected, nothing was published for sideloading."
 
       - name: Keep the logs
         if: failure()

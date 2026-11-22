@@ -485,7 +485,14 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     let r = std::process::Command::new("open").arg("-R").arg(&p).spawn().map(|_| ());
-    #[cfg(not(target_os = "macos"))]
+    // Windows: Explorer with the file selected, like Finder's reveal.
+    #[cfg(target_os = "windows")]
+    let r = {
+        let mut arg = std::ffi::OsString::from("/select,");
+        arg.push(&p);
+        std::process::Command::new("explorer").arg(arg).spawn().map(|_| ())
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let r = std::process::Command::new("xdg-open")
         .arg(p.parent().unwrap_or(&p))
         .spawn()

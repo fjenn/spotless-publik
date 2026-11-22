@@ -705,6 +705,15 @@ impl AppState {
         }
     }
 
+    /// The picture stalled playback and the player dropped it; the sound plays on. A toast says
+    /// why the picture went away. The iOS app reads it off `video_stats` and switches to audio.
+    pub fn on_video_dropped(&self, audio: &str) {
+        if self.player.current_path().as_deref() != Some(audio) {
+            return;
+        }
+        self.emit_notice("Video unavailable right now. Playing the audio.");
+    }
+
     /// [`Self::attach_video`] for the track already playing, when music videos were just turned on.
     pub async fn attach_current_video(self: &Arc<Self>) {
         if let (Some(item), Some(path)) = (self.current_item().await, self.player.current_path()) {

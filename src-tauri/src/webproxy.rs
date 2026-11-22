@@ -42,10 +42,49 @@ pub fn proxied<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
     b: tauri::WebviewWindowBuilder<'a, R, M>,
 ) -> tauri::WebviewWindowBuilder<'a, R, M> {
     #[cfg(windows)]
-    if let Some(url) = webview_proxy() {
-        return b.proxy_url(url);
+    {
+        let mut b = b;
+        let proxy = webview_proxy();
+        if let Some(args) = browser_args(proxy.as_ref()) {
+            b = b.additional_browser_args(&args);
+        }
+        if let Some(url) = proxy {
+            b = b.proxy_url(url);
+        }
+        return b;
     }
+    #[allow(unreachable_code)]
     b
+}
+
+/// WebView2's documented switch-passing variable, `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (how
+/// WebDriver/msedgedriver opens the DevTools port, and how Microsoft support asks for logging
+/// flags), is not applied when the app passes arguments of its own, which wry always does. When the
+/// variable is set, pass wry's own defaults plus its switches, identically for every webview.
+/// Unset (every normal launch), wry keeps building the arguments itself.
+#[cfg(windows)]
+fn browser_args(proxy: Option<&tauri::Url>) -> Option<String> {
+    let extra = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").ok()?;
+    let extra = extra.trim();
+    if extra.is_empty() {
+        return None;
+    }
+    // wry 0.55's defaults (webview2/mod.rs): the mini menu and SmartScreen off, autoplay on (every
+    // Tauri webview has autoplay set), and the proxy, which wry only adds to its own defaults.
+    let mut args = String::from(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required",
+    );
+    if let Some(u) = proxy {
+        args.push_str(&format!(
+            " --proxy-server={}://{}:{}",
+            u.scheme(),
+            u.host_str().unwrap_or_default(),
+            u.port().unwrap_or_default()
+        ));
+    }
+    args.push(' ');
+    args.push_str(extra);
+    Some(args)
 }
 
 #[cfg(test)]

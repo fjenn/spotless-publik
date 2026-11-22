@@ -6,8 +6,9 @@
 // (`quality_changed`), so the next song already plays at the new quality.
 import Foundation
 import Network
+import Observation
 
-@MainActor
+@MainActor @Observable
 final class StreamQuality {
     static let shared = StreamQuality()
 
@@ -22,9 +23,12 @@ final class StreamQuality {
         ("very_high", "Very high", "VERY_HIGH"),
     ]
 
-    private weak var app: AppModel?
-    private var monitor: NWPathMonitor?
-    private(set) var onCellular = false
+    @ObservationIgnored private weak var app: AppModel?
+    @ObservationIgnored private var monitor: NWPathMonitor?
+    @ObservationIgnored private(set) var onCellular = false
+    /// The phone has a network path at all. Off, video is off (`VideoStore.allowed`) and a
+    /// downloaded episode plays its sound alone.
+    private(set) var online = true
 
     /// The stored choice as one of `choices`; anything else is Automatic.
     static func normalized(_ v: String?) -> String {
@@ -47,7 +51,9 @@ final class StreamQuality {
         let m = NWPathMonitor()
         m.pathUpdateHandler = { path in
             let cell = path.isExpensive || path.usesInterfaceType(.cellular)
+            let up = path.status == .satisfied
             Task { @MainActor in
+                if StreamQuality.shared.online != up { StreamQuality.shared.online = up }
                 guard StreamQuality.shared.onCellular != cell else { return }
                 StreamQuality.shared.onCellular = cell
                 StreamQuality.shared.apply()

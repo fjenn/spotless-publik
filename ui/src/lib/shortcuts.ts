@@ -15,6 +15,17 @@ export const IS_MAC =
 		/Mac/.test(navigator.userAgent));
 
 export const MOD = IS_MAC ? '⌘' : 'Ctrl+';
+/** One key cap as this platform names it: the Mac glyphs, Windows/Linux words (Spotify's own labels). */
+const PC_KEYS: Record<string, string> = { '⌘': 'Ctrl', '⌃': 'Ctrl', '⌥': 'Alt', '⇧': 'Shift' };
+export const keyCap = (k: string): string => (IS_MAC ? k : (PC_KEYS[k] ?? k));
+/** A combo written the Mac way ('⇧⌘L', '⌘,') as this platform shows it ('Ctrl+Shift+L'). */
+export function combo(mac: string): string {
+	if (IS_MAC) return mac;
+	const mods = [...mac].filter((c) => c in PC_KEYS).map((c) => PC_KEYS[c]);
+	const rest = [...mac].filter((c) => !(c in PC_KEYS)).join('');
+	const order = ['Ctrl', 'Alt', 'Shift'];
+	return [...order.filter((m) => mods.includes(m)), rest].join('+');
+}
 export const HELP_KEY = '/';
 export const HELP_COMBO = `${MOD}${HELP_KEY}`;
 export const MUTE_COMBO = IS_MAC ? '⇧⌘↓' : 'Ctrl+Shift+Down';

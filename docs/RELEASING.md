@@ -97,7 +97,8 @@ header has the details). It also accepts `NOTARY_KEY_PATH` / `NOTARY_KEY_ID` / `
 [`.github/workflows/release-ios.yml`](../.github/workflows/release-ios.yml) builds the iPhone app
 (`ios/Encore`, bundle `app.spotlessmusic.ios`) and uploads it to App Store Connect whenever an
 `ios-v*` tag is pushed. Apple then processes it (usually 5-30 minutes) and it shows up in
-TestFlight. Nothing is published on GitHub; the run summary names the version and build number.
+TestFlight. The same archive, unsigned, is also published for sideloading (below); the run
+summary names the version and build number.
 
 What the job does (macOS 26 runner, newest stable Xcode, roughly 30-60 minutes; the Rust core in
 release mode with LTO is the slow part):
@@ -110,7 +111,10 @@ release mode with LTO is the slow part):
    `app-store-connect`, destination `upload`, automatic signing), both with
    `-allowProvisioningUpdates` and the App Store Connect API key, so Xcode manages the
    certificates and profiles and the export uploads the build itself;
-5. removes the key file and the temporary keychain, also when the run fails.
+5. packages the archived app **unsigned** as `Spotless.ipa` (development signature and embedded
+   profile stripped, `Payload/Spotless.app`) and, after the upload, publishes it on a GitHub
+   **pre-release** named after the tag (see Sideloading);
+6. removes the key file and the temporary keychain, also when the run fails.
 
 No tests run in this job (unit, UI and E2E tests run locally: `ios/Encore/scripts`).
 
@@ -132,6 +136,24 @@ No tests run in this job (unit, UI and E2E tests run locally: `ios/Encore/script
    ```
    Or Actions › Release iOS › Run workflow, with the tag (or empty, to build the chosen branch as
    it is). Mac tags (`v*`) and iPhone tags (`ios-v*`) never start each other's workflow.
+
+### Sideloading (SideStore / AltStore)
+
+Every `ios-v*` run creates the pre-release `ios-v<version>-<build>` on `fjenn/spotless` with
+`Spotless.ipa`, `Spotless-<version>-<build>.ipa` and `altstore.json` (an AltStore source for that
+one build, written by [`scripts/ci/altstore-source.rb`](../scripts/ci/altstore-source.rb) from the
+IPA's own Info.plist and size). It is marked pre-release and not latest, so
+`releases/latest` (the Mac DMG and its updater) never points at it.
+
+The public source is **https://opena.tech/spotless/altstore.json** (the opena site): it reads the
+newest `ios-v*` release with a `Spotless.ipa` from the GitHub API about once an hour and lists its
+builds, newest first, taking the permissions and minimum iOS from that release's `altstore.json`
+(AltStore refuses an install when the source's permissions differ from the IPA's). Nothing to do
+per release beyond pushing the tag.
+
+Packaging the IPA never blocks TestFlight (it may fail on its own and only warns). If publishing
+fails after a successful upload, a full re-run would hit "build number already used"; instead
+download the `Spotless-ipa` artifact the run keeps in that case and attach it (`gh release upload`), or bump the build and tag again.
 
 ### One-time setup
 

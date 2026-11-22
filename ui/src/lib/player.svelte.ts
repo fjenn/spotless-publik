@@ -888,7 +888,7 @@ export function dragVolume(v: number) {
 	if (volFrame !== null) return;
 	volFrame = requestAnimationFrame(() => {
 		volFrame = null;
-		api.setVolume(playback.volume);
+		api.setVolume(Math.round(playback.volume));
 	});
 }
 
@@ -898,6 +898,8 @@ export function commitVolume(v: number) {
 		cancelAnimationFrame(volFrame);
 		volFrame = null;
 	}
+	// The core takes whole percents; a click between the slider's steps lands on a fraction.
+	v = Math.round(v);
 	playback.volume = v;
 	api.setVolume(v);
 	// Persisted here rather than in Rust's `set_volume`: a drag calls that once per frame and every

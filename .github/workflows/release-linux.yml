@@ -1,0 +1,325 @@
+name: Release Linux
+
+# Builds the Linux AppImage (auto-updating), .deb and .rpm for a release that ALREADY EXISTS (the
+# Mac workflow creates it from the v* tag), attaches them, and adds `linux-x86_64` to latest.json.
+# Unsigned except for Tauri's updater signature (TAURI_SIGNING_PRIVATE_KEY, the same key the Mac
+# build uses).
+#
+# Runs on its own after "Release macOS" finishes (workflow_run), or by hand:
+#   Actions ▸ Release Linux ▸ Run workflow ▸ tag = v1.0.4-rc.6   (dry_run: build + smoke, attach nothing)
+#
+# Adapted from Limusic's linux-release.yml (scripts/fix-appdir-tls.sh, scripts/appdir-foreign-check.sh):
+# `runs-on` is PINNED to ubuntu-24.04 ON PURPOSE. An AppImage cannot bundle glibc, so it inherits
+# the build host's glibc floor (2.39: Ubuntu 24.04+, Debian 13+, Fedora 40+, current Arch). Never
+# `ubuntu-latest`; the glibc-floor step fails the build if someone changes it.
+#
+# latest.json is shared with the Windows workflow: the merge below re-reads the manifest after
+# uploading and re-merges if another job clobbered it. This job never marks a release Latest.
+
+on:
+  workflow_run:
+    workflows: ["Release macOS"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (e.g. v1.0.4-rc.6). With dry_run, any branch or tag.
+        required: true
+        type: string
+      dry_run:
+        description: Build, check and smoke-test, but attach nothing to the release
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-linux-${{ inputs.tag || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # After a Mac release run: only when it succeeded and was for a v* tag.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-24.04 # glibc 2.39 — see the header. NOT ubuntu-latest.
+    timeout-minutes: 60
+    env:
+      TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+      DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - name: Check the tag matches the app version
+        run: |
+          VERSION="$(jq -r .version src-tauri/tauri.conf.json)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ "v$VERSION" != "$TAG" ]; then
+            if [ "$DRY_RUN" = true ]; then
+              echo "::warning::dry run: built ref is $TAG but the app version is $VERSION"
+            else
+              echo "::error::tauri.conf.json says $VERSION but the tag is $TAG"; exit 1
+            fi
+          fi
+
+      - name: Start pulling the foreign-distro images
+        run: |
+          nohup docker pull debian:sid           > /tmp/pull-debian.log 2>&1 &
+          nohup docker pull archlinux:latest     > /tmp/pull-arch.log  2>&1 &
+          nohup docker pull opensuse/tumbleweed  > /tmp/pull-suse.log  2>&1 &
+          nohup docker pull ubuntu:24.04         > /tmp/pull-ubuntu.log 2>&1 &
+
+      # Never fatal: third-party registries; the app refreshes the table at runtime anyway.
+      - name: Bake in the player-cipher registry
+        run: |
+          FARADAY=https://raw.githubusercontent.com/MetrolistGroup/faraday/master/registry/player_configs.json
+          ZEMER=https://raw.githubusercontent.com/ZemerTeam/zemer-cipher/master/library/src/main/assets/player_configs.json
+          tmp="$(mktemp)"
+          for url in "$FARADAY" "$ZEMER"; do
+            if curl -fsSL --max-time 30 "$url" -o "$tmp" \
+               && jq -e '(.players | objects | length) > 0' "$tmp" >/dev/null 2>&1; then
+              cp "$tmp" crates/core/cipher_configs.json
+              echo "bundled $(jq '.players | length' "$tmp") player configs from $url"; exit 0
+            fi
+            echo "::warning::player-cipher registry unusable: $url"
+          done
+
+      - name: Build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            libssl-dev libdbus-1-dev libmpv-dev patchelf file rpm \
+            libjack-jackd2-0 glib-networking mold \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-gl \
+            gstreamer1.0-libav gstreamer1.0-alsa \
+            xvfb x11-apps imagemagick dbus-x11 at-spi2-core xdotool
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.18.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Frontend deps
+        run: cd ui && pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux
+          cache-on-failure: true
+
+      # Pinned to the tauri crate's version (Cargo.lock): CLI 2.12's linuxdeploy stopped bundling
+      # libgmp and libpipewire (Limusic's bundle check caught it).
+      - name: Tauri CLI
+        run: npm install -g "@tauri-apps/cli@2.11.5"
+
+      - name: Build the AppImage, deb and rpm (updater-signed AppImage)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          NO_STRIP: "true"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            if [ "$DRY_RUN" = true ]; then
+              echo "::warning::no TAURI_SIGNING_PRIVATE_KEY: dry run builds without updater artifacts"
+              EXTRA=',"bundle":{"createUpdaterArtifacts":false}'
+            else
+              echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set"; exit 1
+            fi
+          fi
+          (cd ui && pnpm build)
+          tauri build --bundles appimage,deb,rpm --config "{\"build\":{\"beforeBuildCommand\":\"\"}${EXTRA:-}}"
+          # Strip the host-coupled TLS trust stack, bundle GStreamer plugins and libjack, repack and
+          # re-sign (Limusic's fixes for AppImages that only worked on the build host).
+          scripts/fix-appdir-tls.sh
+          ls -la target/release/bundle/appimage target/release/bundle/deb target/release/bundle/rpm
+
+      - name: Check nothing is missing from the bundle
+        run: |
+          set -euo pipefail
+          APPDIR="$(ls -d target/release/bundle/appimage/*.AppDir | head -1)"
+          HOST_BASELINE="ld-linux-x86-64.so.2 libc.so.6 libm.so.6 libresolv.so.2 libgcc_s.so.1
+            libstdc++.so.6 libGL.so.1 libEGL.so.1 libGLX.so.0 libGLdispatch.so.0 libOpenGL.so.0
+            libdrm.so.2 libgbm.so.1 libwayland-client.so.0 libX11.so.6
+            libX11-xcb.so.1 libxcb.so.1 libxcb-dri3.so.0 libexpat.so.1 libfontconfig.so.1
+            libfreetype.so.6 libharfbuzz.so.0 libfribidi.so.0 libz.so.1 libasound.so.2
+            libusb-1.0.so.0 libcom_err.so.2 libgpg-error.so.0"
+          for f in "$APPDIR"/usr/lib/*.so* "$APPDIR"/usr/lib64/*.so* \
+                   "$APPDIR"/usr/lib/gstreamer-1.0/*.so "$APPDIR"/usr/bin/*; do
+            [ -e "$f" ] || continue
+            objdump -p "$f" 2>/dev/null | awk '/NEEDED/{print $2}' || true   # non-ELF files exit nonzero
+          done | sort -u > /tmp/needed.txt
+          echo "bundle contents:"; ls "$APPDIR/usr/bin"; wc -l < /tmp/needed.txt
+          find "$APPDIR/usr/lib" "$APPDIR/usr/lib64" "$APPDIR/usr/lib/gnutls-fallback" \
+            -maxdepth 1 -printf '%f\n' 2>/dev/null | sort -u > /tmp/have.txt || true
+          MISSING=""
+          while read -r lib; do
+            [ -n "$lib" ] || continue
+            grep -qx "$lib" /tmp/have.txt && continue
+            echo "$HOST_BASELINE" | tr -s ' \n' '\n' | grep -qx "$lib" && continue
+            MISSING="$MISSING $lib"
+          done < /tmp/needed.txt
+          [ -z "$MISSING" ] || { echo "::error::bundle links libraries it neither ships nor can assume:$MISSING"; exit 1; }
+          echo "every DT_NEEDED is either bundled or a host baseline library"
+
+      - name: Check the glibc floor
+        run: |
+          set -euo pipefail
+          FLOOR=2.39
+          APPDIR="$(ls -d target/release/bundle/appimage/*.AppDir | head -1)"
+          WORST="$(find "$APPDIR/usr/lib" "$APPDIR/usr/bin" -type f -exec objdump -T {} + 2>/dev/null \
+            | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 || true)"
+          echo "highest glibc symbol required by the bundle: ${WORST:-none}"
+          [ "$(printf '%s\nGLIBC_%s\n' "$WORST" "$FLOOR" | sort -V | tail -1)" = "GLIBC_$FLOOR" ] \
+            || { echo "::error::bundle requires $WORST but the floor is GLIBC_$FLOOR"; exit 1; }
+
+      # Start the real AppImage on this runner under Xvfb with a session bus (MPRIS, tray), keep it
+      # up 20 s, screenshot the window. The screenshot is the artifact to compare with the Mac look.
+      - name: Smoke test (Xvfb, 20 s, screenshot)
+        run: |
+          set -uo pipefail
+          APPIMAGE="$(ls target/release/bundle/appimage/*.AppImage | head -1)"
+          chmod +x "$APPIMAGE"
+          mkdir -p smoke
+          export APPIMAGE_EXTRACT_AND_RUN=1 HOME="$RUNNER_TEMP/home" XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
+          mkdir -p "$HOME" "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+          Xvfb :99 -screen 0 1440x900x24 >/dev/null 2>&1 &
+          export DISPLAY=:99
+          sleep 2
+          # No window manager under Xvfb, so the window lands wherever: move it to the corner and
+          # shoot the window itself. Cleanup by PID only (a name match would kill this script too).
+          cat > "$RUNNER_TEMP/smoke.sh" <<'SMOKE'
+          "$1" > smoke/app.log 2>&1 &
+          APP=$!
+          alive=1
+          for i in $(seq 1 20); do sleep 1; kill -0 $APP 2>/dev/null || { alive=0; break; }; done
+          WID="$(xdotool search --onlyvisible --name '^Spotless$' 2>/dev/null | head -1)"
+          if [ -n "$WID" ]; then
+            xdotool windowmove "$WID" 0 0 windowsize "$WID" 1280 832 2>/dev/null; sleep 2
+            import -window "$WID" smoke/window.png
+          fi
+          import -window root smoke/screen.png
+          if [ $alive = 1 ] && kill -0 $APP 2>/dev/null; then echo ALIVE > smoke/status; else echo DIED > smoke/status; fi
+          kill $APP 2>/dev/null; sleep 2
+          pkill -x spotless 2>/dev/null || true
+          exit 0
+          SMOKE
+          dbus-run-session -- bash "$RUNNER_TEMP/smoke.sh" "$PWD/$APPIMAGE" || true
+          echo "app log (tail):"; tail -40 smoke/app.log || true
+          [ "$(cat smoke/status 2>/dev/null)" = ALIVE ] || { echo "::error::the app exited within 20 s"; exit 1; }
+          echo "app stayed up 20 s"
+
+      - name: Upload the smoke screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-smoke-${{ env.VERSION }}
+          path: smoke/
+          if-no-files-found: warn
+
+      - name: Upload the packages (dry run, for the E2E suite)
+        if: env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+          retention-days: 7
+
+      - name: Verify it loads and runs on foreign distros
+        run: |
+          set -euo pipefail
+          APPDIR="$(readlink -f "$(ls -d target/release/bundle/appimage/*.AppDir | head -1)")"
+          CHECK="$PWD/scripts/appdir-foreign-check.sh"
+          IMAGES="debian:sid archlinux:latest opensuse/tumbleweed"
+          pids=""
+          for image in $IMAGES; do
+            docker run --rm -v "$APPDIR:/app:ro" -v "$CHECK:/check.sh:ro" "$image" bash /check.sh \
+              > "/tmp/check-$(echo "$image" | tr ':/' '--').log" 2>&1 &
+            pids="$pids $!"
+          done
+          fail=0
+          for pid in $pids; do wait "$pid" || fail=1; done
+          for image in $IMAGES; do echo "── $image"; cat "/tmp/check-$(echo "$image" | tr ':/' '--').log"; done
+          [ "$fail" = 0 ] || { echo "::error::the AppDir failed a foreign-distro check"; exit 1; }
+
+      - name: Verify the .deb installs and resolves its libraries
+        id: deb_check
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          DEB="$(ls target/release/bundle/deb/*.deb | head -1)"
+          docker run --rm -v "$PWD/$DEB:/app.deb:ro" ubuntu:24.04 bash -c '
+            set -eu
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y --no-install-recommends /app.deb
+            PKG="$(dpkg-deb -f /app.deb Package)"
+            BIN="$(dpkg -L "$PKG" | grep "^/usr/bin/" | head -1)"
+            echo "installed $BIN"
+            if ldd "$BIN" | grep "not found"; then exit 1; fi
+            echo "every library the binary needs came from the declared Depends"
+          '
+
+      - name: Dry run — built and verified, attaching nothing
+        if: env.DRY_RUN == 'true'
+        run: echo "dry run - every build step and check passed; release left untouched."
+
+      - name: Attach the AppImage, deb and rpm; add linux-x86_64 to latest.json
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEB_OK: ${{ steps.deb_check.outcome }}
+        run: |
+          set -euo pipefail
+          retry() { local n="$1"; shift; local i; for ((i = 1; i <= n; i++)); do "$@" && return 0; echo "::warning::attempt $i/$n failed: $*" >&2; sleep $((i * 10)); done; return 1; }
+
+          # Stable, version-free names, like Spotless.dmg: the website can link releases/latest/download/<name>.
+          B=target/release/bundle
+          mkdir -p dist
+          cp "$(ls $B/appimage/*.AppImage | head -1)" dist/Spotless.AppImage
+          cp "$(ls $B/appimage/*.AppImage.sig | head -1)" dist/Spotless.AppImage.sig \
+            || { echo "::error::no updater signature next to the AppImage"; exit 1; }
+          ASSETS=(dist/Spotless.AppImage dist/Spotless.AppImage.sig)
+          if [ "$DEB_OK" = success ]; then cp "$(ls $B/deb/*.deb | head -1)" dist/Spotless_amd64.deb; ASSETS+=(dist/Spotless_amd64.deb)
+          else echo "::warning::the deb failed its install check and is not attached"; fi
+          if ls $B/rpm/*.rpm >/dev/null 2>&1; then cp "$(ls $B/rpm/*.rpm | head -1)" dist/Spotless.x86_64.rpm; ASSETS+=(dist/Spotless.x86_64.rpm); fi
+
+          retry 5 gh release upload "$TAG" "${ASSETS[@]}" --clobber
+
+          URL="https://github.com/$GH_REPO/releases/download/$TAG/Spotless.AppImage"
+          SIG="$(cat dist/Spotless.AppImage.sig)"
+          for attempt in 1 2 3 4 5; do
+            rm -rf manifest && retry 3 gh release download "$TAG" --pattern latest.json --dir manifest
+            [ "$(jq -r .version manifest/latest.json)" = "$VERSION" ] \
+              || { echo "::error::the release's latest.json is not for $VERSION"; exit 1; }
+            jq --arg sig "$SIG" --arg url "$URL" '.platforms["linux-x86_64"] = { signature: $sig, url: $url }' \
+              manifest/latest.json > latest.json
+            retry 3 gh release upload "$TAG" latest.json --clobber
+            sleep $((3 + RANDOM % 5))
+            rm -rf check && retry 3 gh release download "$TAG" --pattern latest.json --dir check
+            if [ "$(jq -r '.platforms["linux-x86_64"].url // ""' check/latest.json)" = "$URL" ]; then
+              echo "latest.json carries linux-x86_64: $(jq -c '.platforms | keys' check/latest.json)"; break
+            fi
+            [ "$attempt" -lt 5 ] || { echo "::error::linux-x86_64 kept getting clobbered out of latest.json"; exit 1; }
+            echo "another job rewrote the manifest, re-merging"
+          done
+          echo "attached: ${ASSETS[*]}" >> "$GITHUB_STEP_SUMMARY"

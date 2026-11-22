@@ -24,6 +24,9 @@ pub struct VideoStats {
     /// `videotoolbox` when the hardware decodes, empty for software.
     pub hwdec: String,
     pub codec: String,
+    /// The playing file's picture stalled playback and was dropped: the sound plays on alone.
+    /// Showing the picture again (visible off, then on) retries it.
+    pub dropped: bool,
 }
 
 /// stream: video-pods. One frame for Picture in Picture: BGRA, rows top-down, `width * 4` a row.
@@ -62,6 +65,7 @@ impl EncoreCore {
             fps: s.fps,
             hwdec: s.hwdec,
             codec: s.codec,
+            dropped: self.state.player.video_dropped(),
         }
     }
 

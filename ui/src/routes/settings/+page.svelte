@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { combo } from '$lib/shortcuts';
 	/**
 	 * Settings (spotify-spec/screens/settings.md, ref/settings.jpg, audit 32): a main-view page.
 	 * Title "Settings" 32/700 with a search button on the right that filters rows; sections with
@@ -806,7 +807,7 @@
 		<!-- Keyboard shortcuts -->
 		<section data-settings-section>
 			{@render section('shortcuts', 'Keyboard shortcuts')}
-			<Row label="See every keyboard shortcut (⌘/)">
+			<Row label="See every keyboard shortcut ({combo('⌘/')})">
 				{#snippet control()}<Pill variant="outline" onclick={openShortcuts}>Keyboard shortcuts</Pill>{/snippet}
 			</Row>
 		</section>

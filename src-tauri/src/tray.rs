@@ -175,11 +175,24 @@ mod imp {
                 if let TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } = event {
                     show_main(tray.app_handle());
                 }
+                // Windows: a single left click on a notification-area icon opens its app.
+                #[cfg(target_os = "windows")]
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: tauri::tray::MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    show_main(tray.app_handle());
+                }
             });
         // ── stream: polish ── a monochrome template image (the app icon's note glyph, made by
         // scripts/brand/gen-brand.py), so macOS tints it for light/dark menu bars like every
         // other menu-bar extra. Falls back to the colour app icon if it can't be decoded.
-        match tauri::image::Image::from_bytes(TEMPLATE_PNG) {
+        // Off macOS there is no template tinting, and a black glyph would vanish on the dark
+        // Windows taskbar: the colour app icon instead, as Spotify does.
+        let template = if cfg!(target_os = "macos") { tauri::image::Image::from_bytes(TEMPLATE_PNG).ok() } else { None };
+        match template.ok_or(()) {
             Ok(icon) => builder = builder.icon(icon).icon_as_template(true),
             Err(_) => {
                 if let Some(icon) = app.default_window_icon() {

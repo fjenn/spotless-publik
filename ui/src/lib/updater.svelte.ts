@@ -18,6 +18,9 @@ export const UPDATER_ENABLED = true;
 
 const RELEASES_URL = 'https://github.com/fjenn/spotless/releases/latest';
 
+/** The updater plugin's error when Latest's latest.json has no entry for this OS/arch. */
+const NO_BUILD_FOR_PLATFORM = /fallback platforms|were found in the response `platforms`|platform .* was not found/i;
+
 /** How often the quiet check repeats while the app stays open. */
 export const QUIET_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -85,6 +88,10 @@ export async function checkForUpdatesInteractive(): Promise<{ message: string; e
 			return (updateState.result = { message: availableMessage(updateState.available!), error: false, available: true });
 		return (updateState.result = { message: t('settings.about.up_to_date'), error: false, available: false });
 	} catch (e) {
+		// The release marked Latest carries no build for this platform yet (a Mac-only release
+		// while this copy is Windows/Linux): nothing newer to install, so up to date — not an error.
+		if (NO_BUILD_FOR_PLATFORM.test(String(e)))
+			return (updateState.result = { message: t('settings.about.up_to_date'), error: false, available: false });
 		console.warn('update check failed', e);
 		const detail = friendlyNetError(String(e), t('errors.unreachable'));
 		return (updateState.result = { message: t('settings.about.update_check_failed', { error: detail }), error: true, available: false });

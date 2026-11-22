@@ -2540,6 +2540,11 @@ public struct VideoStats {
      */
     public var hwdec: String
     public var codec: String
+    /**
+     * The playing file's picture stalled playback and was dropped: the sound plays on alone.
+     * Showing the picture again (visible off, then on) retries it.
+     */
+    public var dropped: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -2555,7 +2560,11 @@ public struct VideoStats {
          */avsync: Double?, framesDropped: Int64, framesDelayed: Int64, fps: Double?, 
         /**
          * `videotoolbox` when the hardware decodes, empty for software.
-         */hwdec: String, codec: String) {
+         */hwdec: String, codec: String, 
+        /**
+         * The playing file's picture stalled playback and was dropped: the sound plays on alone.
+         * Showing the picture again (visible off, then on) retries it.
+         */dropped: Bool) {
         self.outputUp = outputUp
         self.width = width
         self.height = height
@@ -2565,6 +2574,7 @@ public struct VideoStats {
         self.fps = fps
         self.hwdec = hwdec
         self.codec = codec
+        self.dropped = dropped
     }
 }
 
@@ -2602,6 +2612,9 @@ extension VideoStats: Equatable, Hashable {
         if lhs.codec != rhs.codec {
             return false
         }
+        if lhs.dropped != rhs.dropped {
+            return false
+        }
         return true
     }
 
@@ -2615,6 +2628,7 @@ extension VideoStats: Equatable, Hashable {
         hasher.combine(fps)
         hasher.combine(hwdec)
         hasher.combine(codec)
+        hasher.combine(dropped)
     }
 }
 
@@ -2635,7 +2649,8 @@ public struct FfiConverterTypeVideoStats: FfiConverterRustBuffer {
                 framesDelayed: FfiConverterInt64.read(from: &buf), 
                 fps: FfiConverterOptionDouble.read(from: &buf), 
                 hwdec: FfiConverterString.read(from: &buf), 
-                codec: FfiConverterString.read(from: &buf)
+                codec: FfiConverterString.read(from: &buf), 
+                dropped: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -2649,6 +2664,7 @@ public struct FfiConverterTypeVideoStats: FfiConverterRustBuffer {
         FfiConverterOptionDouble.write(value.fps, into: &buf)
         FfiConverterString.write(value.hwdec, into: &buf)
         FfiConverterString.write(value.codec, into: &buf)
+        FfiConverterBool.write(value.dropped, into: &buf)
     }
 }
 

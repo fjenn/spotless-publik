@@ -1,0 +1,246 @@
+# Builds the Windows app (x64 NSIS installer) from the same source as the Mac app, checks it starts,
+# and on a release tag attaches it to that tag's GitHub Release next to the Mac DMG:
+#   Spotless-Setup.exe              stable name, what the website links to
+#   Spotless-<version>-Setup.exe    versioned copy; the updater entry points here
+#   Spotless-<version>-Setup.exe.sig
+# and adds `windows-x86_64` to the release's latest.json, so installed copies auto-update.
+#
+# Start it by pushing a tag (v*, together with release-mac.yml), or from the Actions tab:
+# Release Windows > Run workflow, with a tag to publish to, or no tag for a build + smoke test only
+# (the installer and a screenshot are kept as run artifacts).
+#
+# The release itself (and its latest.json) is created by release-mac.yml, which notarizes for
+# a while; this job builds in parallel and then waits for that release before attaching to it.
+#
+# CODE SIGNING: not yet. The installer is unsigned, so Windows SmartScreen shows "Windows protected
+# your PC" (More info > Run anyway). To sign with Azure Trusted Signing later, see the marked step
+# "Code signing (hook)" below: set bundle.windows.signCommand in src-tauri/tauri.windows.conf.json
+# to the trusted-signing-cli call and add its secrets (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+# AZURE_TENANT_ID). Tauri then signs the exe, the uninstaller and the installer during the build.
+#
+# Secrets: TAURI_SIGNING_PRIVATE_KEY (the updater key, the same one release-mac.yml uses).
+name: Release Windows
+
+on:
+  push:
+    tags: ["v*"]
+    # Build + smoke test only (no tag, nothing published): push a branch named ci/windows…
+    branches: ["ci/windows**"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach to, e.g. v1.0.5 (empty: build and smoke-test only)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-${{ github.event_name == 'push' && github.ref_name || inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  # The libmpv-2.dll Limusic shipped (shinchiro mpv-winbuild-cmake 20260610, mpv v0.41.0-744), baseline
+  # x86_64 (no AVX2 requirement), importing only DLLs that are part of Windows. Mirrored to this repo's
+  # `deps` prerelease because shinchiro keeps only ~30 days of builds; Limusic's copy is the fallback.
+  MPV_DEV_URL: https://github.com/fjenn/spotless/releases/download/deps/libmpv-2-x86_64-20260610-git-304426c.7z
+  MPV_DEV_FALLBACK: https://github.com/SimoHypers/limusic/releases/download/deps/libmpv-2-x86_64-20260610-git-304426c.7z
+  MPV_DEV_SHA256: af708edcdf6ed12ac7b2bb31b4cbeba0bf7d4eef345a715ef5de782c0ddd6671
+  MPV_DIR: ${{ github.workspace }}\.libmpv
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 200
+    env:
+      TAG: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      # Link the VC++ runtime statically (tauri-build's hybrid CRT), so the app starts on a PC without
+      # the Visual C++ Redistributable. Newer tauri CLIs stopped exporting this themselves. Set for
+      # the whole job so rust-cache and cargo agree on it.
+      STATIC_VCRUNTIME: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r .version src-tauri/tauri.conf.json)"
+          if [ -n "$TAG" ]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+              git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+              git checkout --quiet "refs/tags/$TAG"
+              VERSION="$(jq -r .version src-tauri/tauri.conf.json)"
+            fi
+            if [ "v$VERSION" != "$TAG" ]; then
+              echo "::error::Tag $TAG does not match the app version $VERSION"; exit 1
+            fi
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "building Spotless $VERSION for Windows${TAG:+ (release $TAG)}"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.18.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Rust (MSVC)
+        shell: bash
+        run: rustup default stable-msvc
+
+      # Before rust-cache: the cache key and cargo's fingerprints both hash RUSTFLAGS.
+      - name: RUSTFLAGS (libmpv link path)
+        shell: bash
+        run: echo "RUSTFLAGS=-L native=${{ github.workspace }}\.libmpv" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-windows
+          cache-on-failure: true
+
+      # The dev package has the DLL and a MinGW import lib MSVC cannot use, so build mpv.lib from the
+      # DLL's export table. The DLL is also a bundle resource (tauri.windows.conf.json), installed
+      # next to Spotless.exe.
+      - name: libmpv import library
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "$env:MPV_DIR" | Out-Null
+          curl.exe -fsSL --retry 3 -o "$env:MPV_DIR\mpv-dev.7z" "$env:MPV_DEV_URL"
+          if ($LASTEXITCODE -ne 0) { curl.exe -fsSL --retry 3 -o "$env:MPV_DIR\mpv-dev.7z" "$env:MPV_DEV_FALLBACK" }
+          if ((Get-FileHash "$env:MPV_DIR\mpv-dev.7z" -Algorithm SHA256).Hash -ne $env:MPV_DEV_SHA256) { throw "mpv-dev.7z does not match MPV_DEV_SHA256" }
+          7z x "$env:MPV_DIR\mpv-dev.7z" -o"$env:MPV_DIR" -y | Out-Null
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -property installationPath
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          Set-Location "$env:MPV_DIR"
+          $names = & dumpbin /exports libmpv-2.dll |
+            Select-String -Pattern '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\w+)' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value }
+          if ($names.Count -lt 50) { throw "parsed only $($names.Count) exports from libmpv-2.dll" }
+          @("EXPORTS") + ($names | ForEach-Object { "    $_" }) | Set-Content -Path mpv.def -Encoding ascii
+          & lib /def:mpv.def /name:libmpv-2.dll /out:mpv.lib /machine:x64
+          if (-not (Test-Path "$env:MPV_DIR\mpv.lib")) { throw "lib.exe did not produce mpv.lib" }
+          Copy-Item "$env:MPV_DIR\libmpv-2.dll" "$env:GITHUB_WORKSPACE\src-tauri\libmpv-2.dll" -Force
+
+      - name: UI
+        working-directory: ui
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      # ── Code signing (hook) ───────────────────────────────────────────────────────────────────
+      # Unsigned for now. With Azure Trusted Signing: install trusted-signing-cli here
+      # (`cargo install trusted-signing-cli`), expose AZURE_CLIENT_ID / AZURE_CLIENT_SECRET /
+      # AZURE_TENANT_ID to the build step below, and set in tauri.windows.conf.json:
+      #   "bundle": { "windows": { "signCommand": "trusted-signing-cli -e https://<region>.codesigning.azure.net -a <account> -c <profile> %1" } }
+      - name: Code signing (hook, off)
+        shell: bash
+        run: echo "Windows code signing is not set up yet; the installer is unsigned."
+
+      - name: Build the installer
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Without the updater key (forks, PRs) build without updater artifacts.
+          CONF='{"build":{"beforeBuildCommand":""}}'
+          [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || CONF='{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
+          ./ui/node_modules/.bin/tauri build --bundles nsis --config "$CONF"
+          ls -la target/release/bundle/nsis/
+
+      # Every load-time import must be a DLL Windows itself ships (plus libmpv-2.dll, installed
+      # next to the exe): .github/windows-exe-imports.txt.
+      - name: Import table
+        shell: pwsh
+        run: ./scripts/check-windows-imports.ps1 -Exe target/release/Spotless.exe
+
+      # Starts the built app on the runner's desktop (an interactive session with a display) with a
+      # throwaway profile, checks it is still running after 25 s, and keeps a screenshot and its log.
+      - name: Smoke test (starts and stays up)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = "$env:RUNNER_TEMP\smoke"; New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item src-tauri\libmpv-2.dll target\release\ -Force
+          $env:APPDATA = "$env:RUNNER_TEMP\appdata"; $env:LOCALAPPDATA = "$env:RUNNER_TEMP\localappdata"
+          New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:LOCALAPPDATA | Out-Null
+          $p = Start-Process -FilePath target\release\Spotless.exe -PassThru `
+            -RedirectStandardOutput "$out\stdout.txt" -RedirectStandardError "$out\stderr.txt"
+          Start-Sleep -Seconds 25
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$out\spotless-windows.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          $alive = -not $p.HasExited
+          Get-ChildItem -Recurse $env:APPDATA, $env:LOCALAPPDATA -Include *.log -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName $out -Force }
+          if ($alive) { Write-Host "Spotless is running after 25 s (pid $($p.Id))"; Stop-Process -Id $p.Id -Force }
+          Get-Content "$out\stderr.txt" -Tail 40 -ErrorAction SilentlyContinue
+          if (-not $alive) { throw "Spotless exited early with code $($p.ExitCode)" }
+
+      - name: Name the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/dist"; mkdir -p "$D"
+          EXE="$(ls target/release/bundle/nsis/*-setup.exe | head -1)"
+          cp "$EXE" "$D/Spotless-$VERSION-Setup.exe"
+          cp "$EXE" "$D/Spotless-Setup.exe"
+          [ -f "$EXE.sig" ] && cp "$EXE.sig" "$D/Spotless-$VERSION-Setup.exe.sig"
+          ls -la "$D"
+          echo "DIST=$D" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Spotless-${{ env.VERSION }}-windows
+          path: |
+            ${{ runner.temp }}/dist/Spotless-Setup.exe
+            ${{ runner.temp }}/smoke/
+          retention-days: 7
+          if-no-files-found: warn
+
+      # Waits for release-mac.yml to publish the release (with latest.json), then attaches the
+      # installer and merges windows-x86_64 into latest.json, reading it back in case the Mac job
+      # rewrote it meanwhile.
+      - name: Attach to the release
+        if: env.TAG != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 160); do
+            if gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx latest.json; then break; fi
+            [ "$i" -lt 160 ] || { echo "::error::release $TAG with latest.json never appeared"; exit 1; }
+            echo "waiting for the $TAG release (release-mac.yml)… ($i)"; sleep 60
+          done
+          SIG="$DIST/Spotless-$VERSION-Setup.exe.sig"
+          [ -s "$SIG" ] || { echo "::error::no updater signature (TAURI_SIGNING_PRIVATE_KEY)"; exit 1; }
+          gh release upload "$TAG" "$DIST/Spotless-$VERSION-Setup.exe" "$DIST/Spotless-Setup.exe" "$SIG" --clobber
+          URL="https://github.com/$GH_REPO/releases/download/$TAG/Spotless-$VERSION-Setup.exe"
+          for attempt in 1 2 3 4 5; do
+            rm -rf m c; gh release download "$TAG" --pattern latest.json --dir m
+            [ "$(jq -r .version m/latest.json)" = "$VERSION" ] || { echo "::error::latest.json is not for $VERSION"; exit 1; }
+            jq --arg sig "$(cat "$SIG")" --arg url "$URL" '.platforms["windows-x86_64"] = {signature: $sig, url: $url}' \
+              m/latest.json > latest.json
+            gh release upload "$TAG" latest.json --clobber
+            sleep $((5 + RANDOM % 5))
+            gh release download "$TAG" --pattern latest.json --dir c
+            if [ "$(jq -r '.platforms["windows-x86_64"].url // ""' c/latest.json)" = "$URL" ]; then
+              echo "latest.json platforms: $(jq -c '.platforms | keys' c/latest.json)"; break
+            fi
+            [ "$attempt" -lt 5 ] || { echo "::error::windows-x86_64 kept being overwritten in latest.json"; exit 1; }
+          done
+          echo "### Spotless $VERSION for Windows attached to $TAG" >> "$GITHUB_STEP_SUMMARY"

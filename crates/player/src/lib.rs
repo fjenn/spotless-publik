@@ -80,6 +80,11 @@ pub enum PlayerEvent {
     /// worth trying. The open is a network round trip, so a skip or a crossfade can land first,
     /// and the file named is then no longer the one playing.
     VideoFailed(String),
+    /// The picture of the audio file it names stalled playback (a seek into a video stream that
+    /// can't be fetched: offline, or a dead or slow link), so it was dropped and the sound plays
+    /// on alone. It stays dropped for that file until the picture is shown again
+    /// ([`Player::set_video_visible`] off, then on), which retries it.
+    VideoDropped(String),
     Error(String),
 }
 
@@ -282,6 +287,9 @@ struct Decks {
     videos: Mutex<video::Videos>,
     /// Someone can see the picture, so the deck being heard decodes it.
     video_visible: AtomicBool,
+    /// Bumped each time the picture is shown: the stall watch thread started under an older value
+    /// stops (see `video::watch`).
+    video_watch: AtomicU64,
     /// Set by the video renderer: deck b needs a render context of its own before it can show a
     /// picture, and only the GL thread can make one.
     on_new_deck: OnceLock<Box<dyn Fn() + Send + Sync>>,
@@ -526,6 +534,7 @@ impl Player {
             tx,
             videos: Mutex::new(video::Videos::default()),
             video_visible: AtomicBool::new(false),
+            video_watch: AtomicU64::new(0),
             on_new_deck: OnceLock::new(),
             wid: AtomicI64::new(0),
             applied: Mutex::new([None, None]),

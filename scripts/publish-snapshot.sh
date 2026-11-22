@@ -84,7 +84,6 @@ EXCLUDE=(
   .github/workflows/stream-health.yml
   .github/workflows/website.yml
   .github/workflows/windows-release.yml
-  .github/windows-exe-imports.txt
 )
 # Anything Spotify-reference-like that might appear later under another name.
 EXCLUDE_NAMES=('*spotify-spec*' '*spotify_scrape*' '__pycache__' '*.pyc' '.DS_Store')
@@ -182,7 +181,7 @@ for n in "${EXCLUDE_NAMES[@]}"; do
 done
 
 # The public repo builds its releases itself; never publish it without the workflows that do that.
-for wf in .github/workflows/release-mac.yml .github/workflows/release-ios.yml .github/workflows/ci.yml \
+for wf in .github/workflows/release-mac.yml .github/workflows/release-windows.yml .github/workflows/release-ios.yml .github/workflows/ci.yml \
           ios/Encore/ExportOptions.plist scripts/ci/asc-team-id.rb; do
   [ -f "$STAGE/$wf" ] || die "$wf is missing from the export (deleted, or caught by EXCLUDE?)"
 done

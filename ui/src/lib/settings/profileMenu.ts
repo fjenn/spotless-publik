@@ -1,3 +1,4 @@
+import { combo } from '$lib/shortcuts';
 // The top-bar avatar menu (settings.md "Avatar menu", audit 31): Spotify's text-only list, ≈196px.
 // No account is needed for anything: the profile is the local "Spotless" one, and YouTube Music
 // sign-in is an optional extra at the bottom. Stream p-settings owns the content; TopBar opens it.
@@ -20,7 +21,7 @@ export function profileMenuEntries(): MenuEntry[] {
 		// Device sync: link the iPhone, or (linked) see it in Settings › Devices.
 		linked() ? { label: W.menuLinked, onSelect: () => goSettings('devices') } : { label: W.menuLink, onSelect: () => openPairing() },
 		{ label: 'Private session', checked: lib.privateSession.enabled, onSelect: togglePrivateSession },
-		{ label: 'Settings', hint: '⌘,', onSelect: () => goSettings() },
+		{ label: 'Settings', hint: combo('⌘,'), onSelect: () => goSettings() },
 		{ type: 'separator' },
 		account?.signedIn
 			? { label: 'Sign out of YouTube Music', onSelect: () => api.signOut() }

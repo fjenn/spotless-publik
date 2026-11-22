@@ -23,7 +23,7 @@
 <div align="center">
 
 <sub>Apple silicon and Intel, signed and notarized, updates itself.
-&nbsp;·&nbsp; <b>iPhone:</b> coming soon on TestFlight, then the App Store.</sub><br>
+&nbsp;·&nbsp; <b>iPhone:</b> coming soon to the App Store; <a href="#install-on-iphone">install it yourself</a> in the meantime.</sub><br>
 <sub>[Website][website] &nbsp;·&nbsp; [Support][support] &nbsp;·&nbsp; [All releases][releases]
 &nbsp;·&nbsp; [Report a bug][bug]</sub>
 
@@ -51,6 +51,15 @@
 </details>
 
 <p align="center"><sub>Screenshots use a made-up catalogue: the artists, albums and covers are not real.</sub></p>
+
+## Install on iPhone
+
+Spotless for iPhone is coming to the App Store soon. If you want it now, install it yourself:
+
+- **Build it** with Xcode and your own Apple ID, following [Build from source › iPhone](#iphone)
+  (change the bundle ID and team to your own). An AI coding agent can do this from this README.
+- **Or sideload the ready-made IPA** from the latest `ios-v*` [release][releases] with the tool you
+  prefer. Needs iOS 17 or later.
 
 ## What it does
 

@@ -47,6 +47,9 @@ struct VideoFrameStats: Equatable {
     var fps: Double?
     var hwdec = ""
     var codec = ""
+    /// The core dropped the playing file's picture because it stalled playback (a seek into a
+    /// video stream it couldn't fetch); the sound plays on alone.
+    var pictureDropped = false
     /// A decoded frame is on screen.
     var frameUp: Bool { outputUp && width > 0 }
 }
@@ -61,7 +64,7 @@ extension RealCoreClient: VideoEngine {
         let s = core.videoStats()
         return VideoFrameStats(outputUp: s.outputUp, width: Int(s.width), height: Int(s.height), avsync: s.avsync,
                                dropped: Int(s.framesDropped), delayed: Int(s.framesDelayed), fps: s.fps,
-                               hwdec: s.hwdec, codec: s.codec)
+                               hwdec: s.hwdec, codec: s.codec, pictureDropped: s.dropped)
     }
     func switchVersion() async throws { try await core.switchVersion() }
     func setVideoPiP(_ on: Bool) { core.setVideoPip(on: on) }
@@ -132,6 +135,10 @@ final class VideoStore {
     var episodeWant: Bool?
     /// Picture in Picture is up: the picture stays wanted with the app in the background.
     var pipActive = false
+    /// The track (videoId) whose picture couldn't be played, so it fell back to audio on its own:
+    /// the core dropped a picture that stalled playback, e.g. a scrub in a downloaded episode
+    /// with no connection for the video. "Switch to video" clears it and tries again.
+    var fallbackFor: String?
     @ObservationIgnored private var episodeKey: String?
     // ── end stream: video-pods ──
     @ObservationIgnored private var poll: Task<Void, Never>?
@@ -145,7 +152,7 @@ final class VideoStore {
         engine = app.core as? VideoEngine
         engine?.setVideoLayer(MPVLayerView.shared.metal)
         // Another AppModel (snapshot tests build their own): same store, its state starts over.
-        want = true; switching = nil; frameUp = false; visible = false; lastAllowed = nil
+        want = true; switching = nil; frameUp = false; visible = false; lastAllowed = nil; fallbackFor = nil
         episodeVideo = nil; episodeVideoFor = nil; episodeWant = nil; episodeKey = nil
         fullscreen = false; fullscreenByTap = false; rotateBlocked = false
         VideoPiP.shared.attach(store: self, player: app.player, engine: engine) { [weak app] in
@@ -176,10 +183,11 @@ final class VideoStore {
 
     private var current: SongItem? { app?.player.current }
     var isVideo: Bool { current?.isVideo == true }
-    /// No video offline, in offline mode or on Data Saver (Spotify).
+    /// No video offline, in offline mode or on Data Saver (Spotify). Offline includes no network
+    /// at all: a downloaded episode has its sound on the phone but never its picture.
     var allowed: Bool {
         guard let app else { return false }
-        return !app.downloads.offline && !app.settings.bool(SettingKey.dataSaver)
+        return !app.downloads.offline && !app.settings.bool(SettingKey.dataSaver) && StreamQuality.shared.online
     }
     /// stream: video-pods. The playing track is a podcast episode.
     var isEpisode: Bool { current?.isEpisode == true }
@@ -196,6 +204,7 @@ final class VideoStore {
     /// Which side is picked: the user's choice, not what is on screen (the poster stands in). An
     /// episode starts on the side the setting picks.
     var side: Bool {
+        if let f = fallbackFor, f == current?.videoId { return false }
         if isEpisode { return episodeSrc.map { episodeWant ?? $0.auto } ?? false }
         return switching ?? (isVideo && want)
     }
@@ -259,6 +268,7 @@ final class VideoStore {
 
     /// Spotify's "Switch to video" / "Switch to audio".
     func pick(_ on: Bool) {
+        if on, fallbackFor != nil { fallbackFor = nil }
         guard on != side, let s = current else { return }
         Haptics.impact(.light)
         // An episode only shows or hides its picture: the sound is the same either way.
@@ -340,10 +350,23 @@ final class VideoStore {
         apply()
     }
 
+    /// The picture can't play, the sound can: show the cover and keep playing (Spotify), once.
+    private func fallBackToAudio(offline: Bool) {
+        guard let id = current?.videoId, fallbackFor != id else { return }
+        fallbackFor = id
+        app?.showToast(offline ? "Video unavailable offline. Playing audio." : "Video unavailable right now. Playing audio.")
+    }
+
     private func apply() {
         // The video went away (Now Playing closed, a sheet, an episode without video): collapse.
         if fullscreen && !landscapeAllowed { return exitFullscreen() }
         let w = wanted()
+        // The connection dropped with a picture on screen: the sound carries on from the phone
+        // (a download) or the stream's buffer; say why the picture went.
+        if lastAllowed == true, !w.allowed, !StreamQuality.shared.online, side, hasPicture,
+           app?.downloads.offline == false {
+            app?.showToast("Video unavailable offline. Playing audio.")
+        }
         fetchEpisodeVideo(w.episodeKey)
         VideoPiP.shared.setEnabled(w.pip)
         VideoPiP.shared.playbackChanged()
@@ -380,7 +403,9 @@ final class VideoStore {
                 guard let self else { return }
                 let id = current?.videoId
                 if id != lastId { lastId = id; frameUp = false }
-                let up = engine?.videoStats().frameUp ?? false
+                let stats = engine?.videoStats()
+                if stats?.pictureDropped == true { fallBackToAudio(offline: !StreamQuality.shared.online) }
+                let up = stats?.frameUp ?? false
                 if up != frameUp { withAnimation(.easeOut(duration: 0.25)) { self.frameUp = up } }
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }

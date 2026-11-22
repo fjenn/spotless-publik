@@ -22,6 +22,8 @@
 	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
 	import { thumb } from '$lib/thumb';
 	import { win } from '$lib/win.svelte';
+	import WindowControls from './WindowControls.svelte';
+	import { keyCap } from '$lib/shortcuts';
 	import { isWindowDrag } from '$lib/utils';
 	import Icon from '$lib/kit/Icon.svelte';
 	import IconButton from '$lib/kit/IconButton.svelte';
@@ -518,7 +520,7 @@
 					</button>
 				{:else if focused}
 					<span class="mr-3 flex gap-1 text-xs text-text-subdued">
-						<span class="kbd !h-5 !min-w-5 !text-xs !leading-4">⌘</span><span class="kbd !h-5 !min-w-5 !text-xs !leading-4">K</span>
+						<span class="kbd !h-5 !min-w-5 !text-xs !leading-4">{keyCap('⌘')}</span><span class="kbd !h-5 !min-w-5 !text-xs !leading-4">K</span>
 					</span>
 				{/if}
 				<span class="h-6 w-px bg-text-subdued/60"></span>
@@ -679,8 +681,8 @@
 		</div>
 	</div>
 
-	<!-- Right: What's New bell, avatar menu -->
-	<div class="flex items-center gap-2 pr-2">
+	<!-- Right: What's New bell, avatar menu, then (Windows/Linux) the window buttons in the corner -->
+	<div class="flex items-center gap-2 self-stretch pr-2">
 		<Tooltip text="What's New" side="bottom">
 			{#snippet trigger(props)}
 				<button
@@ -718,5 +720,6 @@
 				</button>
 			{/snippet}
 		</Tooltip>
+		<WindowControls />
 	</div>
 </header>
