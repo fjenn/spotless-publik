@@ -1,3 +1,8 @@
+## Spotless 1.0.4-rc.8 (test build)
+
+- Windows and Linux: the app says "this PC" / "this computer" and "Show in File Explorer" where it used to say "this Mac" and "Show in Finder".
+- Video podcasts on Windows and Linux: if the picture's stream stalls, the sound keeps playing (audio only, with a note).
+
 ## Spotless 1.0.4-rc.7 (test build)
 
 - Windows: Settings › Check for updates no longer reports an error while the newest release has no Windows or Linux build; it says you're up to date.

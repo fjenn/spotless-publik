@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import { THIS_DEVICE } from '$lib/platform';
 	/** Open/close state, so any page (Made for you heroes, the queue) can open the one dialog. */
 	export const aboutRecs = $state({ open: false });
 	export function openAboutRecommendations() {
@@ -34,9 +35,9 @@
 			New Release Mix, Smart Shuffle, radio and autoplay.
 		</p>
 		<p class="mt-4">
-			They're worked out on this Mac, from your own listening: what you play and how often, the
+			They're worked out on {THIS_DEVICE}, from your own listening: what you play and how often, the
 			songs you like, what you skip, what's in your playlists, the artists you follow, and any
-			listening history you imported from Spotify. That history stays on this Mac. Spotless only asks
+			listening history you imported from Spotify. That history stays on {THIS_DEVICE}. Spotless only asks
 			YouTube Music for songs related to a few of the tracks you play, then picks and orders them
 			here. There are no ads and no paid promotion in your recommendations.
 		</p>
@@ -51,8 +52,8 @@
 				of your mixes and skipped in playback.
 			</li>
 			<li>
-				{@render link('clear-history', 'Clear listening history')}: forget every play counted on this
-				Mac. Your mixes start over from your likes and playlists.
+				{@render link('clear-history', 'Clear listening history')}: forget every play counted on
+				{THIS_DEVICE}. Your mixes start over from your likes and playlists.
 			</li>
 		</ul>
 	</div>

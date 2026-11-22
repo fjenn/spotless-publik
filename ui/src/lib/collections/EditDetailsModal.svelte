@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { THIS_DEVICE } from '$lib/platform';
 	/**
 	 * Spotify "Edit details" (overlays.md, ref/edit-details-modal.jpg): 524px #282828 modal, 180px
 	 * cover (hover: pencil + "Choose photo"; "…" → Change photo / Remove photo) left, Name input and
@@ -224,7 +225,7 @@
 	</div>
 	<p class="mt-3 text-xs font-bold text-white">
 		{local
-			? 'The picture you choose is copied into Spotless and stays on this Mac.'
+			? `The picture you choose is copied into Spotless and stays on ${THIS_DEVICE}.`
 			: 'The picture you choose is also uploaded to your YouTube Music playlist. Make sure you have the right to use it.'}
 	</p>
 </Modal>

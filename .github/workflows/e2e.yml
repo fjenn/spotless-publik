@@ -23,6 +23,10 @@ on:
         description: "Test the packages from this Release Linux dry run's artifact instead (run id)"
         required: false
         type: string
+      only:
+        description: "Run only these jobs (space-separated: windows linux player-video-stall windows-signin); empty = all"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -39,6 +43,7 @@ env:
 
 jobs:
   windows:
+    if: inputs.only == '' || contains(format(' {0} ', inputs.only), ' windows ')
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -142,6 +147,7 @@ jobs:
           retention-days: 14
 
   linux:
+    if: inputs.only == '' || contains(format(' {0} ', inputs.only), ' linux ')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -210,3 +216,92 @@ jobs:
           name: e2e-linux-${{ matrix.format }}
           path: ${{ runner.temp }}/e2e-out/
           retention-days: 14
+
+  # The player itself, on the platforms where mpv draws the picture: a downloaded episode in video
+  # mode whose picture stream dies, then a seek. The sound must play on (video.rs `watch`). Real
+  # libmpv, a real H.264 file over a local HTTP server that stops answering mid-file.
+  player-video-stall:
+    if: inputs.only == '' || contains(format(' {0} ', inputs.only), ' player-video-stall ')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      MPV_DEV_URL: https://github.com/fjenn/spotless/releases/download/deps/libmpv-2-x86_64-20260610-git-304426c.7z
+      MPV_DEV_SHA256: af708edcdf6ed12ac7b2bb31b4cbeba0bf7d4eef345a715ef5de782c0ddd6671
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: e2e-player-${{ matrix.os }}
+      - name: libmpv and ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libmpv-dev ffmpeg >/dev/null
+      - name: libmpv and ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $d = "$env:GITHUB_WORKSPACE\.libmpv"; New-Item -ItemType Directory -Force $d | Out-Null
+          curl.exe -fsSL --retry 3 -o "$d\mpv-dev.7z" "$env:MPV_DEV_URL"
+          if ((Get-FileHash "$d\mpv-dev.7z" -Algorithm SHA256).Hash -ne $env:MPV_DEV_SHA256) { throw "libmpv hash mismatch" }
+          7z x "$d\mpv-dev.7z" -o"$d" -y | Out-Null
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          Set-Location $d
+          $names = & dumpbin /exports libmpv-2.dll | Select-String -Pattern '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\w+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+          @("EXPORTS") + ($names | ForEach-Object { "    $_" }) | Set-Content -Path mpv.def -Encoding ascii
+          & lib /def:mpv.def /name:libmpv-2.dll /out:mpv.lib /machine:x64
+          "RUSTFLAGS=-L native=$d" | Out-File -Append $env:GITHUB_ENV
+          $d | Out-File -Append $env:GITHUB_PATH
+          choco install ffmpeg -y --no-progress | Out-Null
+      - name: A real video file (3 min, H.264, no sound)
+        shell: bash
+        run: |
+          ffmpeg -loglevel error -f lavfi -i testsrc2=size=640x360:rate=25 -t 180 -c:v libx264 -preset ultrafast -b:v 1M -g 50 -movflags +faststart -an "$RUNNER_TEMP/picture.mp4"
+          ls -la "$RUNNER_TEMP/picture.mp4"
+          echo "SPOTLESS_TEST_VIDEO=$RUNNER_TEMP/picture.mp4" >> "$GITHUB_ENV"
+      - name: The sound plays on when the picture's stream dies
+        shell: bash
+        run: cargo test -p player --lib a_dead_picture_stream_never_stops_the_sound_after_a_seek -- --nocapture
+      # YouTube answers the runner's IP with 403 on /next, so the installed app cannot build a radio
+      # here. The same radio code runs on recorded /next responses instead: the parser
+      # (tests/fixtures/next_*.json) and the queue/recommendation logic that turns it into a radio.
+      - name: Radio logic on recorded YouTube responses (proxy for the runner's 403)
+        shell: bash
+        run: |
+          cargo test -p innertube --lib models::metadata 2>&1 | tail -4
+          cargo test -p encore-core --lib radio 2>&1 | tail -6
+          echo "### Radio logic on recorded responses ($RUNNER_OS): passed" >> "$GITHUB_STEP_SUMMARY"
+
+  # The sign-in window opened and closed like a user would, no WebDriver or DevTools port involved.
+  windows-signin:
+    if: inputs.only == '' || contains(format(' {0} ', inputs.only), ' windows-signin ')
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Spotless
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ inputs.windows_run }}") {
+            gh run download "${{ inputs.windows_run }}" --repo $env:GITHUB_REPOSITORY --pattern 'Spotless-*-windows' --dir "$env:RUNNER_TEMP\art"
+            Copy-Item (Get-ChildItem "$env:RUNNER_TEMP\art" -Recurse -Filter Spotless-Setup.exe | Select-Object -First 1).FullName "$env:RUNNER_TEMP\Spotless-Setup.exe"
+          } else {
+            gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern Spotless-Setup.exe --dir $env:RUNNER_TEMP
+          }
+          Start-Process "$env:RUNNER_TEMP\Spotless-Setup.exe" -ArgumentList '/S' -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Spotless" -Recurse -Filter Spotless.exe | Select-Object -First 1
+          "SPOTLESS_APP=$($exe.FullName)" | Out-File -Append $env:GITHUB_ENV
+      - name: Sign-in window, opened and closed
+        shell: pwsh
+        run: ./e2e/scripts/signin-cancel-windows.ps1 -Exe $env:SPOTLESS_APP
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-windows-signin
+          path: ${{ runner.temp }}/e2e-out/

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { THIS_DEVICE } from '$lib/platform';
 	import { combo } from '$lib/shortcuts';
 	/**
 	 * Settings (spotify-spec/screens/settings.md, ref/settings.jpg, audit 32): a main-view page.
@@ -122,7 +123,7 @@
 	async function signOut() {
 		const ok = await confirmDialog({
 			title: 'Sign out of YouTube?',
-			body: 'Your library on this Mac stays as it is.',
+			body: `Your library on ${THIS_DEVICE} stays as it is.`,
 			confirmLabel: 'Sign out'
 		});
 		if (!ok) return;
@@ -287,7 +288,7 @@
 	async function removeDownloads() {
 		const ok = await confirmDialog({
 			title: 'Remove all downloads?',
-			body: "Everything you've downloaded will be removed from this Mac. You won't be able to play it offline.",
+			body: `Everything you've downloaded will be removed from ${THIS_DEVICE}. You won't be able to play it offline.`,
 			confirmLabel: 'Remove'
 		});
 		if (!ok) return;
@@ -435,7 +436,7 @@
 		<!-- Account -->
 		<section data-settings-section>
 			{@render section('account', 'Account')}
-			<Row label="Spotless works without an account. Your library, likes and history are stored on this Mac.">
+			<Row label={`Spotless works without an account. Your library, likes and history are stored on ${THIS_DEVICE}.`}>
 				{#snippet control()}<span class="text-sm text-white">Local profile</span>{/snippet}
 			</Row>
 			<Row
@@ -638,7 +639,7 @@
 			<Row
 				id="clear-history"
 				label="Clear listening history"
-				hint="Forgets every play counted on this Mac. Your stats, Your Rotation and recommendations start over."
+				hint={`Forgets every play counted on ${THIS_DEVICE}. Your stats, Your Rotation and recommendations start over.`}
 			>
 				{#snippet control()}
 					<Pill variant="outline" onclick={clearHistory}>Clear</Pill>
@@ -794,7 +795,7 @@
 					{/snippet}
 				</Row>
 			{/if}
-			<Row label="Cache: audio Spotless keeps on this Mac so songs start faster">
+			<Row label={`Cache: audio Spotless keeps on ${THIS_DEVICE} so songs start faster`}>
 				{#snippet children()}
 					<span class="mt-0.5 block text-xs">{cacheBytes === null ? '—' : formatBytes(cacheBytes)}</span>
 				{/snippet}

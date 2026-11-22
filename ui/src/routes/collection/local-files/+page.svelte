@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { THIS_DEVICE } from '$lib/platform';
 	import { ownerName } from '$lib/localuser.svelte';
 	// Local Files (Spotify: the "Local Files" playlist in Your Library). Music on this machine,
 	// from the folders chosen here or in Settings; works signed out and offline (Rust `local.rs`).
@@ -193,7 +194,7 @@
 					title={local.folders.length ? 'No music found in your folders' : 'Add your local music'}
 					body={local.folders.length
 						? 'Spotless plays MP3, FLAC, M4A, OGG, WAV and more. Add another folder or rescan.'
-						: 'Choose a folder on this Mac and its songs show up here. Nothing is uploaded.'}
+						: `Choose a folder on ${THIS_DEVICE} and its songs show up here. Nothing is uploaded.`}
 					actionLabel="Add a folder"
 					onAction={pickFolder}
 				/>

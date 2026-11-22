@@ -427,3 +427,116 @@ fn clock_reads_follow_the_wall_clock_at_any_tempo() {
     }
     p.stop().unwrap();
 }
+
+/// The picture is a second network stream (`video-add`) beside a sound that is already on disk: a
+/// downloaded episode in video mode. When that stream dies (here a local server that stops
+/// answering mid-file, like a dead or crawling link), a seek must not leave the sound stuck behind
+/// it: the player drops the picture and plays on (video.rs `watch`), and says so (VideoDropped).
+///
+/// Needs a real video file: `SPOTLESS_TEST_VIDEO=<mp4>` (the E2E workflow makes one with ffmpeg on
+/// Windows and Linux, the platforms where mpv draws the picture). Skipped without it.
+#[test]
+fn a_dead_picture_stream_never_stops_the_sound_after_a_seek() {
+    use std::io::{Read, Write};
+    use std::sync::atomic::AtomicBool;
+    let Some(video) = std::env::var_os("SPOTLESS_TEST_VIDEO") else {
+        eprintln!("skipped: set SPOTLESS_TEST_VIDEO to an mp4 to run this");
+        return;
+    };
+    let bytes = Arc::new(std::fs::read(video).unwrap());
+    let blocked = Arc::new(AtomicBool::new(false));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/picture.mp4", listener.local_addr().unwrap());
+    {
+        let (bytes, blocked) = (bytes.clone(), blocked.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let (bytes, blocked) = (bytes.clone(), blocked.clone());
+                std::thread::spawn(move || {
+                    let mut s = stream;
+                    let mut req = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match s.read(&mut buf) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => req.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let hold = || loop {
+                        std::thread::sleep(Duration::from_secs(1));
+                    };
+                    if blocked.load(Ordering::SeqCst) {
+                        hold(); // connects, then never answers
+                    }
+                    let head = String::from_utf8_lossy(&req).to_lowercase();
+                    let start = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("range: bytes="))
+                        .and_then(|r| r.split('-').next()?.trim().parse::<usize>().ok())
+                        .unwrap_or(0)
+                        .min(bytes.len());
+                    let len = bytes.len();
+                    let _ = write!(
+                        s,
+                        "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {start}-{}/{len}\r\nContent-Length: {}\r\n\r\n",
+                        len - 1,
+                        len - start
+                    );
+                    // ~512 KB/s, so only the first part of the file is fetched before the cut.
+                    for chunk in bytes[start..].chunks(32 * 1024) {
+                        if blocked.load(Ordering::SeqCst) {
+                            hold(); // the link dies mid-file
+                        }
+                        if s.write_all(chunk).is_err() {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(62));
+                    }
+                });
+            }
+        });
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let sound = dir.path().join("episode.wav");
+    wav(&sound, 180.0, |t| tone(330.0, t));
+    let sound = sound.to_str().unwrap().to_owned();
+    let mut p = Player::new(dir.path().to_str().unwrap()).unwrap();
+    let mut events = p.take_events().unwrap();
+    let incoming = p.idle_mpv().unwrap();
+    for m in [p.mpv(), incoming.as_ref()] {
+        m.set_property("ao", "null").unwrap();
+        m.set_property("ao-null-untimed", false).unwrap();
+        m.set_property("vo", "null").unwrap(); // no GL surface in a test; the stream is what matters
+    }
+    p.set_volume(100).unwrap();
+    p.load(&sound, &HashMap::new(), None, None, false).unwrap();
+    p.play().unwrap();
+    let pos = |p: &Player| p.mpv().get_property::<f64>("time-pos").unwrap_or(-1.0);
+    wait_for("the sound plays", 10.0, || pos(&p) > 0.5);
+
+    p.set_video_for(&sound, &url);
+    p.set_video_visible(true);
+    wait_for("the picture is selected", 20.0, || {
+        p.mpv().get_property::<String>("vid").is_ok_and(|v| v != "no")
+    });
+    let a = pos(&p);
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(pos(&p) - a > 2.0, "plays with the picture: {a} → {}", pos(&p));
+
+    // The link dies, then the listener seeks far past what was fetched.
+    blocked.store(true, Ordering::SeqCst);
+    p.seek(150.0).unwrap();
+    let started = Instant::now();
+    wait_for("the sound plays on past the seek", 15.0, || pos(&p) > 152.0);
+    eprintln!("picture dropped and sound back {:.1}s after the seek", started.elapsed().as_secs_f64());
+    let mut dropped = false;
+    while let Ok(e) = events.try_recv() {
+        dropped |= matches!(e, PlayerEvent::VideoDropped(ref a) if a == &sound);
+    }
+    assert!(dropped, "VideoDropped reported for the episode");
+    assert!(p.video_dropped(), "the picture stays dropped for this file");
+    let b = pos(&p);
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(pos(&p) - b > 1.5, "and keeps playing: {b} → {}", pos(&p));
+}

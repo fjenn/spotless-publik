@@ -94,6 +94,7 @@ jobs:
           gh release download "$FROM" --repo "$GITHUB_REPOSITORY" --pattern Spotless.AppImage
           chmod +x Spotless.AppImage && ./Spotless.AppImage --appimage-extract >/dev/null
           node "$GITHUB_WORKSPACE/e2e/scripts/patch-feed.mjs" squashfs-root/usr/bin/spotless
+          chmod -R a+rX squashfs-root  # --appimage-extract leaves it 0700; appimagetool refuses that
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool && ARCH=x86_64 ./appimagetool --no-appstream squashfs-root ~/Applications/Spotless.AppImage >/dev/null
           gh release download "$TO" --repo "$GITHUB_REPOSITORY" --pattern Spotless.AppImage --dir to

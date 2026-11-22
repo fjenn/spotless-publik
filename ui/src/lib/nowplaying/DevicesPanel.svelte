@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { THIS_DEVICE, THIS_DEVICE_TITLE } from '$lib/platform';
 	/**
 	 * Connect view of the right panel (audit 15-lyrics-and-connect.jpg): the device playing now in a
 	 * highlighted card (accent icon + name, "Spotless" with the equaliser), then "Select another
@@ -32,7 +33,7 @@
 	const active = $derived(audio.devices.active || 'auto');
 	const selected = $derived(audio.devices.selected || 'auto');
 	const nameOf = (id: string) =>
-		id === 'auto' ? 'This Mac' : (list.find((d) => d.name === id)?.description ?? id);
+		id === 'auto' ? THIS_DEVICE_TITLE : (list.find((d) => d.name === id)?.description ?? id);
 	const currentSub = $derived(
 		selected === 'auto'
 			? 'Spotless · System output'
@@ -41,7 +42,7 @@
 				: 'Spotless'
 	);
 	const others = $derived([
-		...(selected !== 'auto' ? [{ name: 'auto', description: 'This Mac (system output)' }] : []),
+		...(selected !== 'auto' ? [{ name: 'auto', description: `${THIS_DEVICE_TITLE} (system output)` }] : []),
 		...list.filter((d) => d.name !== selected)
 	]);
 
@@ -118,6 +119,6 @@
 		{/each}
 	{/if}
 	<p class="px-2 pt-8 text-sm text-text-subdued">
-		Spotless plays on this Mac. Pick the speakers or headphones the sound should come out of.
+		Spotless plays on {THIS_DEVICE}. Pick the speakers or headphones the sound should come out of.
 	</p>
 </div>

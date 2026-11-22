@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { THIS_DEVICE } from '$lib/platform';
 	// "Import from Spotify" (#375), restyled to Spotify's modal (overlays.md) by stream p-settings.
 	// The step on screen is read off the import itself, not kept here, so closing the dialog
 	// mid-import and coming back (from the avatar menu, Settings, or after a toast) lands on whatever
@@ -423,7 +424,7 @@
 					{#if signedIn && !onlyLiked}
 						<div class="flex items-center gap-3 text-text-subdued">
 							<span>Save playlists</span>
-							<Pill variant="chip" selected={where === 'device'} onclick={() => (where = 'device')}>On this Mac</Pill>
+							<Pill variant="chip" selected={where === 'device'} onclick={() => (where = 'device')}>On {THIS_DEVICE}</Pill>
 							<Pill variant="chip" selected={where === 'account'} onclick={() => (where = 'account')}>On YouTube Music</Pill>
 						</div>
 					{/if}

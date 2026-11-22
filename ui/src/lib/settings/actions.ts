@@ -1,3 +1,4 @@
+import { SHOW_IN_FILES } from '$lib/platform';
 // Settings-owned actions shared by the Settings page, the avatar menu and the first-run step
 // (stream p-settings).
 import { goto } from '$app/navigation';
@@ -24,7 +25,7 @@ export async function exportLibrary() {
 		const r = await lib.exportLibrary();
 		toast.success(
 			`Library exported: ${r.likedSongs} liked ${r.likedSongs === 1 ? 'song' : 'songs'}, ${r.playlists} ${r.playlists === 1 ? 'playlist' : 'playlists'}`,
-			{ action: { label: 'Show in Finder', onClick: () => api.revealInFinder(r.path).catch(() => {}) } }
+			{ action: { label: SHOW_IN_FILES, onClick: () => api.revealInFinder(r.path).catch(() => {}) } }
 		);
 	} catch (e) {
 		toast.error(`Couldn't export your library. ${String(e)}`);
@@ -63,7 +64,7 @@ export async function exportOpml() {
 	try {
 		await api.saveTextFile(path, await api.podcastOpmlExport());
 		toast.success('Podcasts exported', {
-			action: { label: 'Show in Finder', onClick: () => api.revealInFinder(path).catch(() => {}) }
+			action: { label: SHOW_IN_FILES, onClick: () => api.revealInFinder(path).catch(() => {}) }
 		});
 	} catch (e) {
 		toast.error(`Couldn't export your podcasts. ${String(e)}`);
