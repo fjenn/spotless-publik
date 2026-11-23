@@ -13,7 +13,8 @@
           "libwebkit2gtk-4.1-0",
           "libmpv2",
           "libc6 (>= 2.39)",
-          "libegl1"
+          "libegl1",
+          "curl"
         ],
         "recommends": [
           "desktop-file-utils"
@@ -23,7 +24,8 @@
         "depends": [
           "libappindicator-gtk3",
           "mpv-libs",
-          "libEGL.so.1()(64bit)"
+          "libEGL.so.1()(64bit)",
+          "curl"
         ],
         "recommends": [
           "desktop-file-utils"

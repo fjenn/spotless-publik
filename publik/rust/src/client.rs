@@ -266,17 +266,26 @@ pub fn utc_now() -> String {
 }
 
 fn device_name() -> String {
-    Command::new("hostname")
+    let from_command = Command::new("hostname")
         .output()
         .ok()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .chars()
-                .take(120)
-                .collect()
-        })
-        .unwrap_or_default()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    // Some Linux systems (Arch, minimal installs) have no `hostname` command.
+    let name = if from_command.is_empty() {
+        ["/etc/hostname", "/proc/sys/kernel/hostname"]
+            .iter()
+            .find_map(|p| {
+                std::fs::read_to_string(p)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_default()
+    } else {
+        from_command
+    };
+    name.chars().take(120).collect()
 }
 
 // ---------------------------------------------------------------------------

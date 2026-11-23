@@ -1,0 +1,78 @@
+name: publik Linux check
+
+# publik edition only. After "Release Linux" attaches the Linux files to a release, run publik's
+# self test on each package as a user would install it: the AppImage directly, the .deb on
+# Ubuntu and Debian, the .rpm on Fedora. Each must print "publik self-test: ok spotless <version>".
+
+on:
+  workflow_run:
+    workflows: ["Release Linux"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v1.0.4-rc.11)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download the Linux files
+        run: |
+          set -euo pipefail
+          mkdir dl
+          gh release download "$TAG" --dir dl \
+            --pattern Spotless.AppImage --pattern Spotless_amd64.deb --pattern Spotless.x86_64.rpm
+          ls -la dl
+          echo "WANT=publik self-test: ok spotless ${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: AppImage
+        run: |
+          set -euo pipefail
+          chmod +x dl/Spotless.AppImage
+          out="$(PUBLIK_SELF_TEST=1 APPIMAGE_EXTRACT_AND_RUN=1 timeout 120 dl/Spotless.AppImage 2>&1 | grep 'publik self-test' || true)"
+          echo "$out"
+          [ "$out" = "$WANT" ] || { echo "::error::AppImage: expected '$WANT'"; exit 1; }
+
+      - name: .deb on Ubuntu 24.04 and Debian
+        run: |
+          set -euo pipefail
+          for image in ubuntu:24.04 debian:trixie; do
+            echo "== $image"
+            out="$(docker run --rm -e WANT="$WANT" -v "$PWD/dl/Spotless_amd64.deb:/app.deb:ro" "$image" bash -c '
+              set -e
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq >/dev/null
+              apt-get install -y -qq --no-install-recommends /app.deb >/dev/null
+              command -v curl >/dev/null || { echo "curl was not installed with the package"; exit 1; }
+              BIN="$(dpkg -L "$(dpkg-deb -f /app.deb Package)" | grep "^/usr/bin/" | head -1)"
+              PUBLIK_SELF_TEST=1 timeout 120 "$BIN" 2>&1 | grep "publik self-test" || true
+            ')"
+            echo "$out"
+            [ "$out" = "$WANT" ] || { echo "::error::$image: expected '$WANT'"; exit 1; }
+          done
+
+      - name: .rpm on Fedora
+        run: |
+          set -euo pipefail
+          out="$(docker run --rm -v "$PWD/dl/Spotless.x86_64.rpm:/app.rpm:ro" fedora:latest bash -c '
+            set -e
+            dnf install -y -q /app.rpm >/dev/null
+            BIN="$(rpm -ql "$(rpm -qp --qf "%{NAME}" /app.rpm)" | grep "^/usr/bin/" | head -1)"
+            PUBLIK_SELF_TEST=1 timeout 120 "$BIN" 2>&1 | grep "publik self-test" || true
+          ')"
+          echo "$out"
+          [ "$out" = "$WANT" ] || { echo "::error::Fedora: expected '$WANT'"; exit 1; }

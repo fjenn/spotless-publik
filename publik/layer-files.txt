@@ -1,4 +1,5 @@
 .assets/spotless-screenshot.png
+.github/workflows/publik-linux-check.yml
 .github/workflows/publik-sync.yml
 Cargo.lock
 Cargo.toml
@@ -21,6 +22,8 @@ src-tauri/Cargo.toml
 src-tauri/publik-app-token.txt
 src-tauri/src/lib.rs
 src-tauri/tauri.conf.json
+src-tauri/tauri.linux.conf.json
 ui/src/lib/publik/gate-state.svelte.ts
 ui/src/lib/publik/Gate.svelte
+ui/src/lib/updater.svelte.ts
 ui/src/routes/+layout.svelte

@@ -63,7 +63,7 @@ Spotless for iPhone is coming to the App Store soon. If you want it now, install
 
 ## Install on Linux
 
-Early release for x86_64. Download one of these from the [newest release with Linux builds](https://github.com/fjenn/spotless/releases/tag/v1.0.4-rc.11):
+Early release for x86_64. Download one of these from the [latest release](https://github.com/fjenn/spotless-publik/releases/latest):
 
 - **AppImage** (any distro): `Spotless.AppImage`, then `chmod +x Spotless.AppImage` and run it.
   Minimal or server installs may need `sudo apt install libegl1` first.

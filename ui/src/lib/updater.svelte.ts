@@ -16,7 +16,7 @@ import { getVersion } from '@tauri-apps/api/app';
 /** The kill switch (see the header). */
 export const UPDATER_ENABLED = true;
 
-const RELEASES_URL = 'https://github.com/fjenn/spotless/releases/latest';
+const RELEASES_URL = 'https://github.com/fjenn/spotless-publik/releases/latest'; // publik edition
 
 /** The updater plugin's error when Latest's latest.json has no entry for this OS/arch. */
 const NO_BUILD_FOR_PLATFORM = /fallback platforms|were found in the response `platforms`|platform .* was not found/i;
