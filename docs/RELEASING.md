@@ -217,12 +217,11 @@ then `xcodebuild -exportArchive -archivePath build/Spotless.xcarchive -exportOpt
 
 ## The other Spotless repos (keep them current)
 
-Everything starts in this working copy (private, on this Mac only). Three GitHub repos follow it:
+Everything starts in this working copy (private, on this Mac only). Two GitHub repos follow it:
 
 | Repo | What it is | How it is updated |
 |---|---|---|
 | `fjenn/spotless` | The open-source app (Mac, iPhone, Windows, Linux) | `scripts/publish-snapshot.sh`, then push `~/music-app/public-snapshot` main |
-| `fjenn/spotless-publik` | `fjenn/spotless` + the `publik/` layer (Mac, publikhq.com) | `publik-sync.yml` hourly, or `publik/sync.sh` in `~/spotless-publik` (needed by hand when a workflow file changed). Releases only with the owner's OK. |
 | `fjenn/spotless-appstore` | The App Store edition (iPhone only, bundle `app.spotlessapp.ios`, no import or sign-in); its own source of truth, real history | In `~/spotless-appstore`: `scripts/appstore/sync.sh` brings fjenn/spotless's `crates/`, `ios/Encore/Encore` and `ios/EncoreCore` changes over as a PR (CI compiles the app unsigned); merge it when green. The old private mirror is backed up at `~/music-app/backups/spotless-appstore-private.git`. |
 
-After every iPhone or core change: publish the snapshot first, then run both syncs.
+After every iPhone or core change: publish the snapshot first, then run the App Store sync.

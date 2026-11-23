@@ -1,3 +1,8 @@
+## Spotless 1.0.4-rc.12
+
+- Windows and Linux downloads are now on the latest release (Windows installer not code-signed yet).
+- Fedora 45 and other newer Linux distributions: the .rpm starts again (OpenSSL is built into the app).
+
 ## Spotless 1.0.4-rc.11 (test build)
 
 - Windows and Linux: the tray menu's "now playing" row follows every song and podcast (it could read "Nothing playing" while something played).

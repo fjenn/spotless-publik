@@ -66,6 +66,10 @@ windows = { version = "0.61", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# OpenSSL built into the app: a libssl.so.3 linked from the Ubuntu build machine is missing on newer
+# distributions (Fedora 45 ships a newer OpenSSL), so the .rpm would not start there. native-tls
+# still finds each system's certificates through openssl-probe.
+openssl = { version = "0.10", features = ["vendored"] }
 # The music video's GL surface under the webview (nativevideo.rs). Same version tauri pulls in.
 gtk = "0.18"
 ksni = "0.3.6"
