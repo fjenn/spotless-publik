@@ -61,7 +61,7 @@ jobs:
               set -e
               export DEBIAN_FRONTEND=noninteractive
               apt-get update -qq >/dev/null
-              apt-get install -y -qq --no-install-recommends /app.deb >/dev/null
+              apt-get install -y -qq /app.deb >/dev/null   # as a user does: recommended packages included
               command -v curl >/dev/null || { echo "curl was not installed with the package"; exit 1; }
               BIN="$(dpkg -L "$(dpkg-deb -f /app.deb Package)" | grep "^/usr/bin/" | head -1)"
               PUBLIK_SELF_TEST=1 timeout 120 "$BIN" > /tmp/run.log 2>&1 || true
