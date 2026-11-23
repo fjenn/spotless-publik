@@ -44,6 +44,8 @@ jobs:
       - name: AppImage
         run: |
           set -euo pipefail
+          # A desktop always has these; this runner is a bare server (README: minimal installs).
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libegl1 libgl1 >/dev/null
           chmod +x dl/Spotless.AppImage
           PUBLIK_SELF_TEST=1 APPIMAGE_EXTRACT_AND_RUN=1 timeout 120 dl/Spotless.AppImage > appimage.log 2>&1 || echo "exit code $?"
           out="$(grep 'publik self-test' appimage.log || true)"
