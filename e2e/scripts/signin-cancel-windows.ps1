@@ -42,10 +42,15 @@ for ($round = 1; $round -le 3; $round++) {
   $login.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()   # the window's ✕
   Start-Sleep 6
   # The sheet behind it may still be up: its Close/Cancel.
-  Press (Win 'Spotless') 'Close' | Out-Null; Press (Win 'Spotless') 'Cancel' | Out-Null
+  # (Its "Cancel", not "Close": the title bar's own ✕ is also a button named Close, and that one
+  # hides the app to the tray, which is what pressed it in an earlier version of this probe.)
+  Press (Win 'Spotless') 'Cancel' | Out-Null
   Start-Sleep 3
   Shot "signin-closed-$round"
-  if ($p.HasExited) { break }
+  $state = if ($p.HasExited) { "EXITED code $($p.ExitCode)" } elseif (-not (Win 'Spotless')) { 'running, main window not on screen' } else { 'running, window shown' }
+  Write-Host "round ${round} after closing the sign-in window: $state"
+  Copy-Item "$env:APPDATA\app.spotless.desktop\encore.log" "$Out\signin-encore-$round.log" -ErrorAction SilentlyContinue
+  if ($p.HasExited -or -not (Win 'Spotless')) { break }
   $rounds = $round
 }
 $alive = -not $p.HasExited

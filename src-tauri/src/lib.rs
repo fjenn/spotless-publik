@@ -703,6 +703,7 @@ pub fn run() {
             .collect();
     }
     std::env::set_var(RESTARTED_ENV, "1");
+    loopback_bypasses_proxy();
 
     // Two separate NVIDIA/WebKitGTK failures, two separate variables. Neither substitutes for
     // the other, which is the mistake ee48c55 made.
@@ -996,7 +997,13 @@ pub fn run() {
                 // at this AppImage's path. Windows' NSIS installer writes them to the registry.
                 #[cfg(target_os = "linux")]
                 if app.env().appimage.is_some() {
-                    if let Err(e) = app.deep_link().register_all() {
+                    // The plugin writes the .desktop file, then runs `update-desktop-database`
+                    // (desktop-file-utils), and logs an ERROR when that is missing. Every desktop
+                    // ships it; only minimal or server installs don't, and there nothing can open
+                    // a link anyway. So skip quietly there instead of erroring on every launch.
+                    if !on_path("update-desktop-database") {
+                        tracing::debug!("no update-desktop-database: spotless:// links not registered");
+                    } else if let Err(e) = app.deep_link().register_all() {
                         tracing::warn!(error = %e, "could not register the spotless:// link handler");
                     }
                 }
@@ -1607,5 +1614,58 @@ mod tests {
         assert!(close_hides(Some("true")));
         assert!(close_hides(Some("garbage")));
         assert!(!close_hides(Some("false")));
+    }
+}
+
+/// Is `cmd` an executable on `$PATH`? (Linux only: used before shelling out to desktop tools.)
+#[cfg(target_os = "linux")]
+fn on_path(cmd: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| {
+            std::fs::metadata(dir.join(cmd)).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+    })
+}
+
+/// Behind a corporate proxy (`HTTP_PROXY`/`HTTPS_PROXY` set), mpv's ffmpeg sent our loopback
+/// stream URLs (`http://127.0.0.1:<port>/…`) to that proxy too: 502 Bad Gateway on every track,
+/// then "too many track failures". ffmpeg honours `no_proxy`, so make sure it names loopback.
+/// Runs at startup, before any thread exists. Outbound traffic (reqwest) still uses the proxy:
+/// only loopback addresses are added.
+fn loopback_bypasses_proxy() {
+    const LOOPBACK: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
+    for key in ["no_proxy", "NO_PROXY"] {
+        let current = std::env::var(key).unwrap_or_default();
+        let merged = merge_no_proxy(&current, &LOOPBACK);
+        if merged != current {
+            std::env::set_var(key, merged);
+        }
+    }
+}
+
+/// `current` plus every host in `add` it lacks, comma-separated.
+fn merge_no_proxy(current: &str, add: &[&str]) -> String {
+    let mut hosts: Vec<String> =
+        current.split(',').map(str::trim).filter(|h| !h.is_empty()).map(str::to_owned).collect();
+    for h in add {
+        if !hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
+            hosts.push((*h).to_owned());
+        }
+    }
+    hosts.join(",")
+}
+
+#[cfg(test)]
+mod no_proxy_tests {
+    use super::merge_no_proxy;
+
+    #[test]
+    fn adds_loopback_and_keeps_what_was_there() {
+        assert_eq!(merge_no_proxy("", &["127.0.0.1", "localhost"]), "127.0.0.1,localhost");
+        assert_eq!(
+            merge_no_proxy(" corp.example, LOCALHOST ", &["127.0.0.1", "localhost"]),
+            "corp.example,LOCALHOST,127.0.0.1"
+        );
     }
 }

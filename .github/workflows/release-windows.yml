@@ -203,6 +203,38 @@ jobs:
           ls -la "$D"
           echo "DIST=$D" >> "$GITHUB_ENV"
 
+      # ── SignPath (off until SignPath Foundation approves the project) ─────────────────────
+      # To switch on: set repo secret SIGNPATH_API_TOKEN and variables SIGNPATH_ORGANIZATION_ID,
+      # SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG (release-signing), then uncomment. SignPath signs the
+      # NSIS installer this job built; the Tauri updater signature (.sig) is then made again over the
+      # signed file, because signing changes its bytes:
+      #   ui/node_modules/.bin/tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$DIST/Spotless-$VERSION-Setup.exe"
+      #
+      # - id: unsigned
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: unsigned-installer
+      #     path: ${{ runner.temp }}/dist/Spotless-${{ env.VERSION }}-Setup.exe
+      # - uses: signpath/github-action-submit-signing-request@v1
+      #   with:
+      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #     organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      #     project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      #     signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+      #     github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+      #     wait-for-completion: true
+      #     output-artifact-directory: ${{ runner.temp }}/signed
+      # - name: Use the signed installer (and re-sign it for the updater)
+      #   shell: bash
+      #   env:
+      #     TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      #     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      #   run: |
+      #     cp "$RUNNER_TEMP/signed/Spotless-$VERSION-Setup.exe" "$DIST/Spotless-$VERSION-Setup.exe"
+      #     cp "$DIST/Spotless-$VERSION-Setup.exe" "$DIST/Spotless-Setup.exe"
+      #     ./ui/node_modules/.bin/tauri signer sign "$DIST/Spotless-$VERSION-Setup.exe"
+      #     mv "$DIST/Spotless-$VERSION-Setup.exe.sig" "$DIST/Spotless-$VERSION-Setup.exe.sig"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

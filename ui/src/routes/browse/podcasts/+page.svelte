@@ -1,4 +1,12 @@
 <script lang="ts">
+	import { focusSearch } from '$lib/shell/search.svelte';
+	/** Open search scoped to podcasts with the field focused: what you type next searches shows
+	 *  (the top bar keeps `&type=` while you type), instead of landing on Browse all with no cursor. */
+	async function searchPodcasts() {
+		await goto('/search?type=podcasts');
+		focusSearch();
+	}
+
 	/** Browse ▸ Podcasts: your shows, new episodes, continue listening, then the podcast chart. */
 	import { onMount } from 'svelte';
 	import type { ChartsPage } from '$lib/api';
@@ -65,7 +73,7 @@
 		{/if}
 		{#if !podcasts.follows.length && !top && (charts || chartsFailed)}
 			<EmptyState title="Let's find some podcasts to follow" body="Search for a show you like and follow it to see new episodes here."
-				actionLabel="Search podcasts" onAction={() => goto('/search?type=podcasts')} />
+				actionLabel="Search podcasts" onAction={searchPodcasts} />
 		{/if}
 	</div>
 </div>

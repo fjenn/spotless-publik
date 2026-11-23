@@ -21,9 +21,16 @@ export function initErrorLog() {
 	// The engine string is the first thing asked about on a rendering bug, and WebKitGTK's release
 	// is not in it, so it goes in the log where the report picks it up for free.
 	logUi('info', `webview ${navigator.userAgent}`);
-	window.addEventListener('error', (e) =>
-		logUi('error', `${e.message} (${e.filename}:${e.lineno}:${e.colno})`)
-	);
+	window.addEventListener('error', (e) => {
+		// Chromium (WebView2, so Windows) reports a ResizeObserver whose callback changed layout as an
+		// "error" every few seconds; it is benign (the next frame delivers them) and Spotify-sized
+		// pages trip it constantly. Keep it out of the log instead of an ERROR line per resize.
+		if (/^ResizeObserver loop/.test(e.message ?? '')) {
+			e.stopImmediatePropagation();
+			return;
+		}
+		logUi('error', `${e.message} (${e.filename}:${e.lineno}:${e.colno})`);
+	});
 	window.addEventListener('unhandledrejection', (e) =>
 		logUi('error', `unhandled rejection: ${describe(e.reason)}`)
 	);

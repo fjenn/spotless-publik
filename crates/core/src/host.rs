@@ -59,8 +59,12 @@ pub trait Host: Send + Sync + 'static {
     /// The UI may load anything under this directory. No-op elsewhere.
     fn allow_asset_dir(&self, _path: &Path) {}
 
-    /// A track started (desktop: the optional "now playing" notification).
+    /// A track started (desktop: the optional "now playing" notification). Only called when the
+    /// user turned those notifications on; [`Self::now_playing_changed`] is the unconditional one.
     fn track_changed(&self, _title: &str, _artists: &str, _even_focused: bool) {}
+
+    /// Every track start, notifications or not (desktop: the tray menu's "now playing" row).
+    fn now_playing_changed(&self, _title: &str, _artists: &str) {}
 
     /// Playback started or paused (desktop: the tray menu's toggle label).
     fn playing_changed(&self, _playing: bool) {}

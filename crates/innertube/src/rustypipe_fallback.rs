@@ -61,6 +61,34 @@ impl FallbackError {
 /// Resolve a videoId to its best audio stream via rustypipe. `prefer_high`: pick the
 /// highest-bitrate opus/mp4a stream (matches our HIGH preference); else lowest ≤128k.
 pub async fn resolve(video_id: &str, prefer_high: bool) -> Result<StreamCandidate, FallbackError> {
+    resolve_with_probe(video_id, prefer_high, PROBE_URL).await
+}
+
+/// The page rustypipe fetches its visitor data from, and the first thing it requests.
+const PROBE_URL: &str = "https://music.youtube.com/";
+
+/// Can we reach `url` at all? One GET with a short timeout, any HTTP status counts as reached:
+/// a consent page or a 403 is still an answer, only transport failure (offline, DNS, a proxy
+/// refusing the CONNECT) is not.
+async fn probe(url: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+        .map_err(|e| e.to_string())?;
+    client.get(url).send().await.map(|_| ()).map_err(|e| e.to_string())
+}
+
+async fn resolve_with_probe(
+    video_id: &str,
+    prefer_high: bool,
+    probe_url: &str,
+) -> Result<StreamCandidate, FallbackError> {
+    // rustypipe 0.11 unwraps that same fetch (`visitor_data.rs`) and panics when it fails. The
+    // panic is caught below, but it still prints a backtrace to stderr on every offline play. So
+    // when the page can't be reached at all, answer `unreachable` ourselves and never call it.
+    if let Err(e) = probe(probe_url).await {
+        return Err(FallbackError::RustyPipe(format!("unreachable: {e}")));
+    }
     // Keep rustypipe's cache out of the app CWD (it defaults to ./rustypipe_cache.json +
     // ./rustypipe_reports/, and an installed app's CWD may not be writable).
     let storage = std::env::temp_dir().join("limusic-rustypipe");
@@ -140,7 +168,17 @@ fn map_err(e: RpError) -> FallbackError {
 
 #[cfg(test)]
 mod tests {
-    use super::FallbackError;
+    /// Offline: the probe fails, so rustypipe (which would panic) is never called, and the
+    /// error is silence (`answered() == false`), not a verdict on the track.
+    #[tokio::test]
+    async fn unreachable_youtube_skips_rustypipe_without_panicking() {
+        // Port 1 on loopback: nothing listens, the connect is refused at once.
+        let err = resolve_with_probe("dQw4w9WgXcQ", true, "http://127.0.0.1:1/").await.unwrap_err();
+        assert!(matches!(&err, FallbackError::RustyPipe(m) if m.starts_with("unreachable")), "{err}");
+        assert!(!err.answered());
+    }
+
+    use super::{resolve_with_probe, FallbackError};
 
     #[test]
     fn only_a_verdict_counts_as_an_answer() {
@@ -153,3 +191,4 @@ mod tests {
         );
     }
 }
+

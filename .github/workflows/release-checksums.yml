@@ -1,0 +1,47 @@
+name: Release checksums
+
+# SHA256SUMS on every release, once the last platform (Linux, which runs after the Mac release) has
+# attached its files. The hashes are the ones GitHub computed on upload (the assets' `digest`), so
+# nothing is downloaded. Check a download with: sha256sum -c SHA256SUMS --ignore-missing
+on:
+  workflow_run:
+    workflows: ["Release Linux", "Release Windows"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v1.0.4-rc.8"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-checksums-${{ inputs.tag || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  sums:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Write SHA256SUMS from the release's assets
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            # Release Windows runs on the tag; Release Linux runs after the Mac release, on main.
+            TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName')"
+            case "${{ github.event.workflow_run.head_branch }}" in v*) TAG="${{ github.event.workflow_run.head_branch }}" ;; esac
+          fi
+          gh api "repos/$GH_REPO/releases/tags/$TAG" \
+            --jq '.assets[] | select(.name != "latest.json" and .name != "SHA256SUMS" and (.digest // "") != "") | "\(.digest | ltrimstr("sha256:"))  \(.name)"' \
+            | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+          [ -s SHA256SUMS ] || { echo "::error::no assets with digests on $TAG"; exit 1; }
+          gh release upload "$TAG" SHA256SUMS --clobber
+          echo "### SHA256SUMS on $TAG ($(wc -l < SHA256SUMS) files)" >> "$GITHUB_STEP_SUMMARY"

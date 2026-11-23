@@ -61,6 +61,17 @@ Spotless for iPhone is coming to the App Store soon. If you want it now, install
 - **Or sideload the ready-made IPA** from the latest `ios-v*` [release][releases] with the tool you
   prefer. Needs iOS 17 or later.
 
+## Install on Linux
+
+Early release for x86_64. Download one of these from the [newest release with Linux builds](https://github.com/fjenn/spotless/releases/tag/v1.0.4-rc.11):
+
+- **AppImage** (any distro): `Spotless.AppImage`, then `chmod +x Spotless.AppImage` and run it.
+  Minimal or server installs may need `sudo apt install libegl1` first.
+- **Debian / Ubuntu**: `sudo apt install ./Spotless_amd64.deb`
+- **Fedora / openSUSE**: `sudo dnf install ./Spotless.x86_64.rpm`
+
+Linux builds are not signed; check the download against `SHA256SUMS` on the same release.
+
 ## What it does
 
 Spotless plays music, podcasts and audiobooks. The Mac app (Tauri + Svelte) and the iPhone app
@@ -136,11 +147,24 @@ with your YouTube account, and only then.
   Deezer's public search, MusicBrainz, SponsorBlock, the Internet Archive). They receive what a
   request needs, such as a search term or a song title and artist, plus your IP address, like any
   website would.
-- **YouTube sign-in is optional.** The sign-in cookie is kept in the system Keychain and is sent
-  only to YouTube/Google. While you are signed in, songs you play are added to your YouTube
+- **YouTube sign-in is optional.** The sign-in cookie is kept in the system Keychain on the Mac (in
+  the app's own database on Windows and Linux) and is sent only to YouTube/Google. While you are signed in, songs you play are added to your YouTube
   history unless you turn that off in Settings or use a private session.
 
 The full text is on the [privacy page][privacy].
+
+## Code signing policy
+
+Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+
+- **Committers and reviewers:** members of the [fjenn](https://github.com/fjenn) organization.
+- **Approvers:** [fjenn](https://github.com/fjenn) (owner).
+- **Builds:** Windows binaries are built only from this repository's source code, by GitHub
+  Actions (`.github/workflows/release-windows.yml`). Nothing is built or signed on a personal
+  machine.
+- **Privacy:** the app sends no telemetry. Its network calls go only to the music, podcast and
+  lyrics sources it plays from, GitHub (for updates) and, if you link devices, the optional sync
+  relay. See [Privacy](#privacy).
 
 ## Build from source
 
@@ -220,8 +244,8 @@ live.
 <details>
 <summary><b>Does it work on Windows, Linux or Android?</b></summary>
 <br>
-Not as a supported release. The Mac and iPhone apps are what we build and test. The upstream
-project, <a href="https://github.com/SimoHypers/limusic">Limusic</a>, has Windows and Linux builds.
+Linux: yes, see <a href="#install-on-linux">Install on Linux</a>. Windows is being tested and comes
+soon. Android is not planned yet.
 </details>
 
 ## Credits

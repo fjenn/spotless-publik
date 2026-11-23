@@ -52,10 +52,10 @@
 	draggable="false"
 >
 	<span
-		class="absolute top-0 left-0 block max-w-[70%] p-4 font-title font-bold break-words text-white [hyphens:auto] {size ===
+		class="absolute top-0 left-0 block max-w-[70%] p-4 font-title font-bold text-white [hyphens:manual] [overflow-wrap:normal] [word-break:normal] {size ===
 		'lg'
-			? 'text-xl leading-7'
-			: 'text-base leading-5'}">{title}</span
+			? 'text-xl leading-7 tile-title-lg'
+			: 'text-base leading-5 tile-title'}">{title}</span
 	>
 	{#if image}
 		<img
@@ -67,3 +67,16 @@
 		/>
 	{/if}
 </a>
+
+<style>
+	/* Never split a word ("Podcast/s", "Audiobo/oks" on Linux, whose fallback font is wider).
+	   Instead the title shrinks with the tile when a ~10-letter word would not fit the label's
+	   width (70% of the tile minus the 2rem padding); at normal tile widths the min() keeps the
+	   design size, so the Mac look is unchanged. */
+	.tile-title {
+		font-size: min(1rem, calc((70cqi - 2rem) / 6.2));
+	}
+	.tile-title-lg {
+		font-size: min(1.25rem, calc((70cqi - 2rem) / 6.2));
+	}
+</style>

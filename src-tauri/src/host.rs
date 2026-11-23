@@ -47,6 +47,9 @@ impl Host for TauriHost {
 
     fn track_changed(&self, title: &str, artists: &str, even_focused: bool) {
         crate::notify::track_changed(&self.app, title, artists, even_focused);
+    }
+
+    fn now_playing_changed(&self, title: &str, artists: &str) {
         crate::tray::set_track(&self.app, title, artists);
     }
 

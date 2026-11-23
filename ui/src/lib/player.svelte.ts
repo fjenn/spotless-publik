@@ -1730,7 +1730,10 @@ export function initApp(mini = false): () => void {
 		api.onPlaybackError((msg) => {
 			// stream: instant. A load that failed is not loading any more.
 			if (playback.now?.loading) playback.now = { ...playback.now, loading: false };
-			kitToast.fail(msg, "Couldn't play this song");
+			// Longer than a normal error toast: the player sits at 0:00 with nothing else saying
+			// why, and a resolve that tried every client can land after the user has looked away
+			// (a Windows test read the screen 10 s after pressing play and saw nothing).
+			kitToast.fail(msg, "Couldn't play this song", { duration: 12000 });
 		}),
 		api.onPlaybackNotice((msg) => toast(msg)), // auto-skipped an unplayable track
 		api.onCoverError((msg) => kitToast.fail(msg, "Couldn't change the cover")), // playlist artwork YouTube wouldn't take

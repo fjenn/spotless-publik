@@ -133,7 +133,7 @@
 						<div class="truncate text-sm text-white" data-testid="np-chapter">{chapter.title}</div>
 					{/if}
 				</div>
-				{#if song && !local}
+				{#if song}
 					<IconButton
 						icon={liked ? CheckCircleIcon : PlusCircleIcon}
 						fill={liked}

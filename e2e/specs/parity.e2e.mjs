@@ -40,6 +40,14 @@ async function shot(name) {
 	}
 }
 
+/** YouTube refused the runner's datacenter IP (403 / bot check), or a DevTools-only artifact: not
+ *  the app. Recorded as a labelled skip, with the proxy that covers it. */
+function envSkip(ctx, title, why) {
+	fs.appendFileSync(path.join(OUT, 'results.jsonl'), JSON.stringify({ suite: ctx.test.parent.title, title, passed: 'skip', error: why }) + '\n');
+	ctx.skip();
+}
+const refused = (e) => /403|not a bot|without an account|ip-ban|LOGIN_REQUIRED/i.test(String(e?.message ?? e));
+
 function note(title, text) {
 	fs.appendFileSync(path.join(OUT, 'notes.jsonl'), JSON.stringify({ title, note: text }) + '\n');
 }
@@ -384,13 +392,13 @@ describe('Playback', () => {
 			// Below 1000 px the bar hides the slider (as Spotify's does); the keyboard still works.
 			const v0 = Number(await browser.execute(() => document.querySelector('[aria-label="Change volume"]')?.getAttribute('aria-valuenow')));
 			await browser.execute(() => document.activeElement?.blur?.());
-			await browser.keys(['Control', 'ArrowDown']);
+			await browser.keys(['Alt', 'ArrowDown']);
 			const v1 = await until(async () => {
 				const v = Number(await browser.execute(() => document.querySelector('[aria-label="Change volume"]')?.getAttribute('aria-valuenow')));
 				return v < v0 ? v : null;
-			}, { msg: 'Ctrl+Down lowered the volume' });
+			}, { msg: 'Alt+Down lowered the volume' });
 			assert.ok((await advances(2000)).moved > 1, 'still playing');
-			note('volume: mute, unmute, set', `narrow window: Ctrl+Down ${v0} → ${v1}`);
+			note('volume: mute, unmute, set', `narrow window (slider hidden below 1000 px, as in Spotify): Alt+Down ${v0} → ${v1}`);
 			return;
 		}
 		const { width } = await vol.getSize();
@@ -442,8 +450,14 @@ describe('Playback', () => {
 describe('Queue, radio and lyrics', () => {
 	it('add to queue from the track menu', async () => {
 		await go('/collection/local-files');
-		await (await row('Tone C')).click({ button: 'right' });
-		await click(await $('//*[@role="menuitem"][contains(normalize-space(.), "Add to queue")]'));
+		const addItem = '//*[@role="menuitem"][contains(normalize-space(.), "Add to queue")]';
+		for (let i = 0; i < 3 && !(await $(addItem).isExisting()); i++) {
+			await browser.keys('Escape');
+			await (await row('Tone C')).scrollIntoView({ block: 'center' });
+			await (await row('Tone C')).click({ button: 'right' });
+			await sleep(800);
+		}
+		await click(await $(addItem));
 		await sleep(1000);
 		const q = await inv('get_queue');
 		const upcoming = q.items.slice(q.currentIndex + 1).map((s) => s.title);
@@ -481,14 +495,31 @@ describe('Queue, radio and lyrics', () => {
 		note('lyrics view: synced lines for the playing track', `${ly.lines.length} lines from ${ly.source}, synced ${ly.synced}`);
 	});
 
-	it('song radio fills the queue (YouTube Music)', async () => {
+	it('song radio fills the queue (YouTube Music)', async function () {
 		const s = state.songs[0];
+		const title = 'song radio fills the queue (YouTube Music)';
+		const why = 'YouTube /next answered the runner with 403; radio logic proven on recorded responses (player-video-stall job, Radio logic step)';
 		// Queue-building only: the radio's YouTube streams can't play from the runner's IP.
-		await inv('start_radio', { kind: 'song', id: s.id, name: s.title, start: null }).catch((e) => note('song radio fills the queue (YouTube Music)', e.message));
+		try {
+			await inv('start_radio', { kind: 'song', id: s.id, name: s.title, start: null });
+		} catch (e) {
+			if (refused(e)) {
+				await playLocal('Tone A');
+				return envSkip(this, title, why);
+			}
+			throw e;
+		}
 		const q = await until(async () => {
 			const x = await inv('get_queue');
 			return x.items.length > 10 ? x : null;
-		}, { timeout: 120_000, every: 2000, msg: 'radio tracks' });
+		}, { timeout: 60_000, msg: 'radio tracks' }).catch(async (e) => {
+			if (/radio fetch failed.*403/.test(sys.logText())) return null;
+			throw e;
+		});
+		if (!q) {
+			await playLocal('Tone A');
+			return envSkip(this, title, why);
+		}
 		await shot('radio-queue');
 		note('song radio fills the queue (YouTube Music)', `${q.items.length} tracks from "${q.sourceName}"`);
 		await playLocal('Tone A');
@@ -795,7 +826,11 @@ describe('Settings and accounts', () => {
 		if (await b.isExisting()) {
 			await click(b);
 			const r = await $('[data-testid="update-result"]');
-			await r.waitForDisplayed({ timeout: 30_000 });
+			if (!(await r.waitForDisplayed({ timeout: 30_000 }).catch(() => false)) || /fail|error/i.test(await r.getText())) {
+				await sleep(5000);
+				await click(b); // a second try: a dropped connection to github.com is not the app
+				await r.waitForDisplayed({ timeout: 30_000 });
+			}
 			const text = await r.getText();
 			await shot('update-check');
 			assert.ok(!/fail|error/i.test(text), `update check: ${text}`);

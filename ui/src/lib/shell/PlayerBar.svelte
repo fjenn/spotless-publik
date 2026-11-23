@@ -218,7 +218,8 @@
 					{#if chapter}<span aria-hidden="true" class="mx-1">·</span><span data-testid="bar-chapter">{chapter.title}</span>{/if}
 				</div>
 			</div>
-			{#if currentSong && !api.isLocalId(currentSong.video_id)}
+			<!-- Local files can be liked too, like Spotify (and like their track rows here already). -->
+			{#if currentSong}
 				<IconButton
 					icon={liked ? CheckCircleIcon : PlusCircleIcon}
 					fill={liked}

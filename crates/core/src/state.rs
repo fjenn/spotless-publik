@@ -3135,6 +3135,9 @@ impl AppState {
         self.emit_own("playback-state", "playing");
         // Push the same metadata to the OS media widget (context/16) and Discord.
         self.media_show(item);
+        // The tray's "now playing" row follows every track, whatever the notification setting
+        // (it read "Nothing playing" through a whole podcast when notifications were off).
+        self.host.now_playing_changed(&item.title, &item.artists);
         // A restored queue is paused at launch: nothing started, so nothing to announce.
         if stream_client != "restored"
             && self.db.get_setting("track_notifications").as_deref() == Some("true")

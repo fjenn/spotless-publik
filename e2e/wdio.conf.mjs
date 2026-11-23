@@ -92,6 +92,7 @@ export const config = {
 	},
 
 	afterTest(test, _ctx, { passed, error, duration }) {
+		if (!passed && !error) return; // skipped: the test recorded its own row
 		fs.appendFileSync(
 			RESULTS,
 			JSON.stringify({
@@ -122,13 +123,13 @@ export const config = {
 				)
 			: {};
 		const md = [
-			`## Spotless E2E (${process.platform}) — ${rows.filter((r) => r.passed).length}/${rows.length} passed`,
+			`## Spotless E2E (${process.platform}) — ${rows.filter((r) => r.passed === true).length}/${rows.length} passed, ${rows.filter((r) => r.passed === 'skip').length} by proxy`,
 			'',
 			'| area | feature | result | notes |',
 			'|---|---|---|---|',
 			...rows.map(
 				(r) =>
-					`| ${r.suite} | ${r.title} | ${r.passed ? 'pass' : '**FAIL**'} | ${(r.error || notes[r.title] || '').replace(/\|/g, '\\|')} |`
+					`| ${r.suite} | ${r.title} | ${r.passed === 'skip' ? 'proxy / environment' : r.passed ? 'pass' : '**FAIL**'} | ${(r.error || notes[r.title] || '').replace(/\|/g, '\\|')} |`
 			)
 		].join('\n');
 		fs.writeFileSync(path.join(OUT, 'results.md'), md + '\n');
