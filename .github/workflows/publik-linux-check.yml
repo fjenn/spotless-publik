@@ -20,19 +20,21 @@ permissions:
 
 jobs:
   check:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
+    # "Release Linux" itself runs on main (it is triggered by the Mac release), so after it the
+    # tag is the newest release's.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+      TAG: ${{ inputs.tag }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
       - name: Download the Linux files
         run: |
           set -euo pipefail
+          [ -n "$TAG" ] || TAG="$(gh release list --limit 1 --json tagName -q '.[0].tagName')"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"; echo "checking $TAG"
           mkdir dl
           gh release download "$TAG" --dir dl \
             --pattern Spotless.AppImage --pattern Spotless_amd64.deb --pattern Spotless.x86_64.rpm
