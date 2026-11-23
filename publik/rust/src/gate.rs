@@ -445,7 +445,10 @@ impl GateUi for WindowUi {
         #[cfg(target_os = "macos")]
         let r = std::process::Command::new("open").arg(url).status();
         #[cfg(target_os = "windows")]
-        let r = std::process::Command::new("cmd").args(["/C", "start", "", url]).status();
+        // Not `cmd /C start`: cmd would split the address at an `&`.
+        let r = client::quiet_command("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
+            .status();
         #[cfg(all(unix, not(target_os = "macos")))]
         let r = std::process::Command::new("xdg-open").arg(url).status();
         if let Err(e) = r {

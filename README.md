@@ -72,6 +72,15 @@ Early release for x86_64. Download one of these from the [latest release](https:
 
 Linux builds are not signed; check the download against `SHA256SUMS` on the same release.
 
+## Install on Windows
+
+Early release for Windows 10 and 11 (x64). Download `Spotless-Setup.exe` from the
+[latest release](https://github.com/fjenn/spotless-publik/releases/latest) and run it.
+
+The installer is not code-signed yet (signing is being set up), so Windows SmartScreen shows
+"Windows protected your PC": choose **More info**, then **Run anyway**. Check the download against
+`SHA256SUMS` on the same release.
+
 ## What it does
 
 Spotless plays music, podcasts and audiobooks. The Mac app (Tauri + Svelte) and the iPhone app
@@ -244,8 +253,8 @@ live.
 <details>
 <summary><b>Does it work on Windows, Linux or Android?</b></summary>
 <br>
-Linux: yes, see <a href="#install-on-linux">Install on Linux</a>. Windows is being tested and comes
-soon. Android is not planned yet.
+Linux: yes, see <a href="#install-on-linux">Install on Linux</a>. Windows: yes, see
+<a href="#install-on-windows">Install on Windows</a> (not code-signed yet). Android is not planned yet.
 </details>
 
 ## Credits

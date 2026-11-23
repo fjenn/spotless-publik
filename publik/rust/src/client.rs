@@ -18,6 +18,20 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+/// A command that opens no console window on Windows (the app has none, so each curl or
+/// hostname run would otherwise flash a black window on screen).
+pub fn quiet_command(program: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 use serde_json::{json, Map, Value};
 
 use super::app_version;
@@ -266,7 +280,7 @@ pub fn utc_now() -> String {
 }
 
 fn device_name() -> String {
-    let from_command = Command::new("hostname")
+    let from_command = quiet_command("hostname")
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -299,7 +313,7 @@ pub struct Reply {
 /// Runs curl with `args`, `stdin` on its standard input; the status code is
 /// read from the last line (`-w`). A transport failure is `Err`.
 fn curl(args: &[String], stdin: &str) -> Result<Reply, String> {
-    let mut child = Command::new("curl")
+    let mut child = quiet_command("curl")
         // A local publik (tests, `PUBLIK_ORIGIN`) is never reached through a
         // proxy; every other address is unaffected.
         .args([

@@ -1,6 +1,7 @@
 .assets/spotless-screenshot.png
 .github/workflows/publik-linux-check.yml
 .github/workflows/publik-sync.yml
+.github/workflows/publik-windows-check.yml
 Cargo.lock
 Cargo.toml
 publik/layer-files.txt

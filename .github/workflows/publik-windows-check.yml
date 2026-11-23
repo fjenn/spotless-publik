@@ -1,0 +1,58 @@
+name: publik Windows check
+
+# publik edition only. After "Release Windows" attaches the installer to a release, install it
+# silently as a user would and run publik's self test on the installed app. It must print
+# "publik self-test: ok spotless <version>".
+
+on:
+  workflow_run:
+    workflows: ["Release Windows"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v1.0.4-rc.11)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$TAG" ] || TAG="$(gh release list --limit 1 --json tagName -q '.[0].tagName')"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"; echo "checking $TAG"
+          mkdir dl
+          gh release download "$TAG" --dir dl --pattern Spotless-Setup.exe
+          ls -la dl
+
+      - name: Install silently and run the self test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $want = "publik self-test: ok spotless $($env:TAG.TrimStart('v'))"
+          Start-Process -FilePath dl\Spotless-Setup.exe -ArgumentList '/S' -Wait
+          $exe = Get-ChildItem -Path "$env:LOCALAPPDATA", "$env:ProgramFiles" -Recurse -Filter 'spotless*.exe' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch 'uninstall|setup' } | Select-Object -First 1
+          if (-not $exe) { throw "the installed Spotless app was not found" }
+          Write-Host "installed: $($exe.FullName)"
+          $env:PUBLIK_SELF_TEST = '1'
+          $out = Join-Path $env:RUNNER_TEMP 'selftest.txt'
+          $p = Start-Process -FilePath $exe.FullName -RedirectStandardOutput $out -PassThru -NoNewWindow
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw "the self test did not finish in 120 s" }
+          $line = Get-Content $out | Where-Object { $_ -match 'publik self-test' } | Select-Object -First 1
+          Write-Host $line
+          if ($line -ne $want) { throw "expected '$want'" }
+          if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) { throw "curl.exe is missing on Windows" }
