@@ -45,9 +45,10 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x dl/Spotless.AppImage
-          out="$(PUBLIK_SELF_TEST=1 APPIMAGE_EXTRACT_AND_RUN=1 timeout 120 dl/Spotless.AppImage 2>&1 | grep 'publik self-test' || true)"
+          PUBLIK_SELF_TEST=1 APPIMAGE_EXTRACT_AND_RUN=1 timeout 120 dl/Spotless.AppImage > appimage.log 2>&1 || echo "exit code $?"
+          out="$(grep 'publik self-test' appimage.log || true)"
           echo "$out"
-          [ "$out" = "$WANT" ] || { echo "::error::AppImage: expected '$WANT'"; exit 1; }
+          [ "$out" = "$WANT" ] || { echo "::error::AppImage: expected '$WANT'"; tail -40 appimage.log; exit 1; }
 
       - name: .deb on Ubuntu 24.04 and Debian
         run: |
@@ -61,7 +62,8 @@ jobs:
               apt-get install -y -qq --no-install-recommends /app.deb >/dev/null
               command -v curl >/dev/null || { echo "curl was not installed with the package"; exit 1; }
               BIN="$(dpkg -L "$(dpkg-deb -f /app.deb Package)" | grep "^/usr/bin/" | head -1)"
-              PUBLIK_SELF_TEST=1 timeout 120 "$BIN" 2>&1 | grep "publik self-test" || true
+              PUBLIK_SELF_TEST=1 timeout 120 "$BIN" > /tmp/run.log 2>&1 || true
+              grep "publik self-test" /tmp/run.log || tail -30 /tmp/run.log
             ')"
             echo "$out"
             [ "$out" = "$WANT" ] || { echo "::error::$image: expected '$WANT'"; exit 1; }
@@ -74,7 +76,8 @@ jobs:
             set -e
             dnf install -y -q /app.rpm >/dev/null
             BIN="$(rpm -ql "$(rpm -qp --qf "%{NAME}" /app.rpm)" | grep "^/usr/bin/" | head -1)"
-            PUBLIK_SELF_TEST=1 timeout 120 "$BIN" 2>&1 | grep "publik self-test" || true
+            PUBLIK_SELF_TEST=1 timeout 120 "$BIN" > /tmp/run.log 2>&1 || true
+            grep "publik self-test" /tmp/run.log || tail -30 /tmp/run.log
           ')"
           echo "$out"
           [ "$out" = "$WANT" ] || { echo "::error::Fedora: expected '$WANT'"; exit 1; }
