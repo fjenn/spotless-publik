@@ -14,7 +14,8 @@
           "libmpv2",
           "libc6 (>= 2.39)",
           "libegl1",
-          "curl"
+          "curl",
+          "ca-certificates"
         ],
         "recommends": [
           "desktop-file-utils"
@@ -25,7 +26,9 @@
           "libappindicator-gtk3",
           "mpv-libs",
           "libEGL.so.1()(64bit)",
-          "curl"
+          "curl",
+          "openssl-libs",
+          "ca-certificates"
         ],
         "recommends": [
           "desktop-file-utils"
