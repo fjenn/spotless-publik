@@ -14,3 +14,9 @@ log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", default-features = false }
+
+# Linux: build OpenSSL into the app. A dynamic libssl.so.3 from the Ubuntu build machine is missing
+# on newer distributions (Fedora 45 ships a newer OpenSSL), so the .rpm would not start there.
+# native-tls still finds each system's certificates through openssl-probe.
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
