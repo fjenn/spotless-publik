@@ -63,6 +63,12 @@ final class PlayerStore {
         queue.items.enumerated().filter { $0.offset > queue.currentIndex }.map { ($0.offset, $0.element) }
     }
 
+    /// The rows before the playing one: still in the queue (Previous walks them), shown folded in
+    /// the queue sheet (issue #3).
+    var earlier: [(index: Int, song: SongItem)] {
+        queue.items.enumerated().filter { $0.offset < queue.currentIndex }.map { ($0.offset, $0.element) }
+    }
+
     func refresh() async {
         if let q = try? await core.getQueue() { queue = q }
         if let p = try? await core.getPlayback() { now = p.now; paused = p.paused; position = p.position; duration = p.duration }

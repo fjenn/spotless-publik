@@ -2,7 +2,9 @@
 	/**
 	 * Queue view of the right panel (queue-panel.md): "Now playing" (one row), "Next in queue" (the
 	 * hand-queued rows) with "Clear queue" (instant, Undo toast), "Next from: <context>" (rest of the album /
-	 * playlist), then autoplay's "Next up" with its on/off hint. Played rows are not shown.
+	 * playlist), then autoplay's "Next up" with its on/off hint. The rows before the playing one stay
+ * folded behind "Show N earlier songs" above "Now playing" (issue #3): a click plays them, they
+ * can't be dragged or removed.
 	 * Drag to reorder upcoming rows (Limusic's `moveTarget` + `move_in_queue`), click selects,
 	 * Delete/Backspace removes the selection, double-click / cover play plays, right-click opens
 	 * the queue item menu. Rows playback skips (`skipReasons`, `unavailable`) are dimmed and inert.
@@ -60,7 +62,23 @@
 		playback.queue.sourceName;
 		limit = PAGE;
 	});
+	// The earlier rows fold again only when something else starts playing, not on every track.
+	let earlierFor: string | null = null;
+	$effect(() => {
+		const key = playback.queue.sourceId ?? playback.queue.sourceName ?? null;
+		if (key === earlierFor) return;
+		earlierFor = key;
+		showEarlier = false;
+		earlierLimit = PAGE;
+	});
 	const contextShown = $derived(context.slice(0, limit));
+
+	// Issue #3: the songs before the playing one are still in the queue (Previous walks them), so
+	// they can be shown and played from here. Folded by default; the nearest ones first, in pages.
+	const earlier = $derived(view.rows.filter((r) => r.i < cur));
+	let showEarlier = $state(false);
+	let earlierLimit = $state(PAGE);
+	const earlierShown = $derived(showEarlier ? earlier.slice(-earlierLimit) : []);
 	const autoplayShown = $derived(view.autoplay.slice(0, Math.max(0, limit - context.length)));
 	const more = $derived(context.length + view.autoplay.length > limit);
 	function sentinel(el: HTMLElement) {
@@ -357,8 +375,38 @@
 	{@attach (n) => dragScroll(n.closest('[data-right-scroll]') as HTMLElement ?? n, SONGS_MIME)}
 	{@attach (n) => dragScroll(n.closest('[data-right-scroll]') as HTMLElement ?? n, TRACKS_MIME)}
 >
+	{#if earlier.length && nowRow}
+		{#if showEarlier}
+			{@render heading(
+				contextName ? `Earlier from: ${contextName}` : 'Earlier',
+				{ label: 'Hide', run: () => (showEarlier = false) },
+				true
+			)}
+			{#if earlier.length > earlierLimit}
+				<div role="row"><div role="gridcell" class="px-2 pb-2">
+					<button
+						type="button"
+						class="text-sm font-bold text-text-subdued hover:text-white hover:underline"
+						onclick={() => (earlierLimit += PAGE)}>Show more</button
+					>
+				</div></div>
+			{/if}
+			{#each earlierShown as r (r.key)}{@render row(r)}{/each}
+		{:else}
+			<div role="row"><div role="gridcell" class="px-2 pt-2">
+				<button
+					type="button"
+					class="text-sm font-bold text-text-subdued hover:text-white hover:underline"
+					data-queue-earlier
+					onclick={() => (showEarlier = true)}
+					>{earlier.length === 1 ? 'Show 1 earlier song' : `Show ${earlier.length} earlier songs`}</button
+				>
+			</div></div>
+		{/if}
+	{/if}
+
 	{#if nowRow}
-		{@render heading('Now playing', undefined, true)}
+		{@render heading('Now playing', undefined, !earlier.length)}
 		{@render row(nowRow)}
 	{/if}
 
