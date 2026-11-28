@@ -275,10 +275,13 @@ struct QueueView: View {
     @State private var drag: CGFloat = 0
     @State private var pill: String?
     @State private var pillTask: Task<Void, Never>?
+    /// Issue #3: the songs before the playing one, folded until asked for.
+    @State private var showEarlier = false
 
     var body: some View {
         let p = app.player
         let up = p.upcoming
+        let earlier = p.earlier
         let queued = up.filter { $0.song.isQueued }
         // Spotify: the context's own rows under "Next from: <context>", then what Autoplay brought
         // in under "Next: Autoplay" (a single pick has only the latter). Once Autoplay starts, the
@@ -308,6 +311,32 @@ struct QueueView: View {
                 .contentShape(Rectangle())
                 .gesture(dismissDrag)
                 List(selection: editing ? $selection : nil) {
+                    if !earlier.isEmpty {
+                        Section {
+                            if showEarlier {
+                                // Play-only rows: not movable, not selectable for Remove.
+                                ForEach(earlier, id: \.index) {
+                                    row($0.song, index: $0.index).moveDisabled(true).selectionDisabled()
+                                }
+                            }
+                        } header: {
+                            HStack {
+                                if showEarlier {
+                                    sectionTitle(p.queue.sourceName.map { "Earlier from: \($0)" } ?? "Earlier")
+                                    Spacer()
+                                }
+                                Button(showEarlier ? "Hide" : (earlier.count == 1 ? "Show 1 earlier song" : "Show \(earlier.count) earlier songs")) {
+                                    withAnimation(Motion.quick) { showEarlier.toggle() }
+                                }
+                                .font(Typo.font(14, .bold)).foregroundStyle(Palette.subdued)
+                                .buttonStyle(.borderless)
+                                .accessibilityIdentifier("queue-earlier")
+                                if !showEarlier { Spacer() }
+                            }
+                            .textCase(nil)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                        }
+                    }
                     if let cur = p.current {
                         nowRow(cur).moveDisabled(true).selectionDisabled()
                             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 16))
